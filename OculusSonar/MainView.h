@@ -262,5 +262,14 @@ private:
   QWidget* m_hexContainer;
   bool m_showHexViewer;
   int m_maxHexBytes;
+
+  QLabel* m_pingIdValue;
+  QLabel* m_packetSizeValue;
+  QLabel* m_rangesValue;
+  QLabel* m_beamsValue;
+  QLabel* m_frequencyValue;
+  QLabel* m_temperatureValue;
+  QLabel* m_pressureValue;
+  QLabel* m_sosValue;
 };
 
