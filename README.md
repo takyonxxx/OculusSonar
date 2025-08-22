@@ -2,6 +2,8 @@
 
 OculusSonar SDK with enhanced debugging capabilities.
 
+Toggle visibility with 'X' hotkey for quick access to Hex and Sonar Packet Info
+
 ## Recent Updates
 
 ### Hex Viewer Integration
