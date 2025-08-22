@@ -1311,95 +1311,6 @@ void MainView::ToggleHexViewer()
     resizeEvent(nullptr);
 }
 
-void MainView::CreateHexViewer()
-{
-    // Sağ taraf için container widget oluştur
-    m_hexContainer = new QWidget(this);
-    m_hexContainer->setStyleSheet("QWidget { border-left: 1px solid gray; }");
-
-    // Layout oluştur
-    QVBoxLayout* layout = new QVBoxLayout(m_hexContainer);
-    layout->setContentsMargins(5, 5, 5, 5);
-
-    // Başlık label'ı ekle
-    QLabel* titleLabel = new QLabel("Raw Packet Data (Hex)", m_hexContainer);
-    titleLabel->setStyleSheet("QLabel { font-weight: bold; color: white; background-color: #404040; padding: 5px; }");
-    layout->addWidget(titleLabel);
-
-    // Hex viewer text browser'ı oluştur
-    m_hexViewer = new QTextBrowser(m_hexContainer);
-    m_hexViewer->setFont(QFont("Monospace", 8));
-
-    // Dark color palette with green text
-    QPalette palette = m_hexViewer->palette();
-    palette.setColor(QPalette::Base, QColor(0, 0, 0));
-    palette.setColor(QPalette::Text, QColor(0, 255, 100));
-    m_hexViewer->setPalette(palette);
-
-    // Set document properties to limit memory usage
-    QTextDocument* doc = m_hexViewer->document();
-    doc->setMaximumBlockCount(1000);
-
-    m_hexViewer->setAcceptRichText(false);
-    m_hexViewer->setPlainText("Hex Viewer Ready - Waiting for packet data...\nPress 'X' to toggle visibility");
-
-    layout->addWidget(m_hexViewer);
-
-    // Button'lar için horizontal layout oluştur
-    QHBoxLayout* buttonLayout = new QHBoxLayout();
-    buttonLayout->setSpacing(10);
-    buttonLayout->setContentsMargins(0, 5, 0, 0);
-
-    // Button stili tanımla
-    QString buttonStyle =
-        "QPushButton {"
-        "   background-color: #01498E;"
-        "   color: #ffffff;"
-        "   border: 1px solid #0066CC;"
-        "   border-radius: 4px;"
-        "   padding: 6px 12px;"
-        "   font-size: 12px;"
-        "   font-weight: bold;"
-        "}"
-        "QPushButton:hover {"
-        "   background-color: #0066CC;"
-        "   border-color: #0080FF;"
-        "}"
-        "QPushButton:pressed {"
-        "   background-color: #003366;"
-        "   border-color: #01498E;"
-        "}";
-
-    // Send Ping button oluştur
-    QPushButton* sendPingBtn = new QPushButton("Send Ping", m_hexContainer);
-    sendPingBtn->setStyleSheet(buttonStyle);
-
-    // Clear button oluştur
-    QPushButton* clearBtn = new QPushButton("Clear", m_hexContainer);
-    clearBtn->setStyleSheet(buttonStyle);
-
-    // Exit button oluştur
-    QPushButton* exitBtn = new QPushButton("Exit", m_hexContainer);
-    exitBtn->setStyleSheet(buttonStyle);
-
-    // Button'ları layout'a ekle
-    buttonLayout->addWidget(sendPingBtn);
-    buttonLayout->addWidget(clearBtn);      // Ortada
-    buttonLayout->addWidget(exitBtn);
-
-    // Ana layout'a button layout'ını ekle
-    layout->addLayout(buttonLayout);
-
-    // Default olarak görünür yap
-    m_showHexViewer = true;
-    m_hexContainer->setVisible(true);
-
-    // Button click connectionları
-    connect(sendPingBtn, &QPushButton::clicked, this, &MainView::OnSendPingClicked);
-    connect(clearBtn, &QPushButton::clicked, this, &MainView::OnClearHexViewer);
-    connect(exitBtn, &QPushButton::clicked, this, &MainView::OnExitHexViewer);
-}
-
 // Send Ping button click handler (MainView.h'a da eklenmeli)
 void MainView::OnSendPingClicked()
 {
@@ -1473,56 +1384,390 @@ void MainView::OnExitHexViewer()
     ToggleHexViewer();
 }
 
+void MainView::CreateHexViewer()
+{
+    // Sağ taraf için container widget oluştur
+    m_hexContainer = new QWidget(this);
+    m_hexContainer->setStyleSheet(
+        "QWidget { "
+        "   border-left: 2px solid #0066CC; "
+        "   background-color: #1a1a1a; "
+        "}"
+        );
+
+    // Ana layout oluştur
+    QVBoxLayout* mainLayout = new QVBoxLayout(m_hexContainer);
+    mainLayout->setContentsMargins(8, 8, 8, 8);
+    mainLayout->setSpacing(8);
+
+    // ===========================================
+    // SONAR DATA SECTION
+    // ===========================================
+
+    // Sonar Data başlık frame'i
+    QFrame* sonarDataFrame = new QFrame(m_hexContainer);
+    sonarDataFrame->setFrameStyle(QFrame::Box | QFrame::Raised);
+    sonarDataFrame->setStyleSheet(
+        "QFrame {"
+        "   background-color: #2a2a2a;"
+        "   border: 2px solid #0066CC;"
+        "   border-radius: 8px;"
+        "   margin: 2px;"
+        "}"
+        );
+
+    QVBoxLayout* sonarLayout = new QVBoxLayout(sonarDataFrame);
+    sonarLayout->setContentsMargins(10, 8, 10, 8);
+    sonarLayout->setSpacing(4);
+
+    // Sonar Data başlığı
+    QLabel* sonarTitle = new QLabel("SONAR DATA MONITOR", sonarDataFrame);
+    sonarTitle->setStyleSheet(
+        "QLabel {"
+        "   font-weight: 700;"
+        "   font-size: 14px;"
+        "   font-family: 'Segoe UI', 'San Francisco', 'Helvetica Neue', 'Arial', sans-serif;"
+        "   color: #00FFFF;"
+        "   background-color: #003366;"
+        "   padding: 6px;"
+        "   border-radius: 4px;"
+        "   border: 1px solid #0066CC;"
+        "}"
+        );
+    sonarTitle->setAlignment(Qt::AlignCenter);
+    sonarLayout->addWidget(sonarTitle);
+
+    // Grid layout için widget
+    QWidget* gridWidget = new QWidget();
+    QGridLayout* gridLayout = new QGridLayout(gridWidget);
+    gridLayout->setSpacing(6);
+    gridLayout->setContentsMargins(5, 5, 5, 5);
+
+    // Label stilini tanımla
+    QString labelStyle =
+        "QLabel {"
+        "   color: #CCCCCC;"
+        "   font-weight: 600;"
+        "   font-size: 14px;"
+        "   font-family: 'Segoe UI', 'San Francisco', 'Helvetica Neue', 'Arial', sans-serif;"
+        "   padding: 2px 6px;"
+        "   background-color: #404040;"
+        "   border-radius: 3px;"
+        "   min-width: 80px;"
+        "}";
+
+    // Value stilini tanımla
+    QString valueStyle =
+        "QLabel {"
+        "   color: #F8FAFC;"
+        "   font-weight: 600;"
+        "   font-size: 14px;"
+        "   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Source Code Pro', 'Consolas', monospace;"
+        "   padding: 4px 8px;"
+        "   background-color: #1a1a1a;"
+        "   border: 1px solid #333333;"
+        "   border-radius: 4px;"
+        "   min-width: 100px;"
+        "}";
+
+    // Ping ID
+    QLabel* pingIdLabel = new QLabel("Ping ID:", gridWidget);
+    pingIdLabel->setStyleSheet(labelStyle);
+    m_pingIdValue = new QLabel("---", gridWidget);
+    m_pingIdValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(pingIdLabel, 0, 0);
+    gridLayout->addWidget(m_pingIdValue, 0, 1);
+
+    // Packet Size
+    QLabel* packetSizeLabel = new QLabel("Packet Size:", gridWidget);
+    packetSizeLabel->setStyleSheet(labelStyle);
+    m_packetSizeValue = new QLabel("--- bytes", gridWidget);
+    m_packetSizeValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(packetSizeLabel, 1, 0);
+    gridLayout->addWidget(m_packetSizeValue, 1, 1);
+
+    // Ranges
+    QLabel* rangesLabel = new QLabel("Ranges:", gridWidget);
+    rangesLabel->setStyleSheet(labelStyle);
+    m_rangesValue = new QLabel("---", gridWidget);
+    m_rangesValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(rangesLabel, 2, 0);
+    gridLayout->addWidget(m_rangesValue, 2, 1);
+
+    // Beams
+    QLabel* beamsLabel = new QLabel("Beams:", gridWidget);
+    beamsLabel->setStyleSheet(labelStyle);
+    m_beamsValue = new QLabel("---", gridWidget);
+    m_beamsValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(beamsLabel, 3, 0);
+    gridLayout->addWidget(m_beamsValue, 3, 1);
+
+    // Frequency
+    QLabel* frequencyLabel = new QLabel("Frequency:", gridWidget);
+    frequencyLabel->setStyleSheet(labelStyle);
+    m_frequencyValue = new QLabel("--- Hz", gridWidget);
+    m_frequencyValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(frequencyLabel, 4, 0);
+    gridLayout->addWidget(m_frequencyValue, 4, 1);
+
+    // Temperature
+    QLabel* temperatureLabel = new QLabel("Temperature:", gridWidget);
+    temperatureLabel->setStyleSheet(labelStyle);
+    m_temperatureValue = new QLabel("--- °C", gridWidget);
+    m_temperatureValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(temperatureLabel, 5, 0);
+    gridLayout->addWidget(m_temperatureValue, 5, 1);
+
+    // Pressure
+    QLabel* pressureLabel = new QLabel("Pressure:", gridWidget);
+    pressureLabel->setStyleSheet(labelStyle);
+    m_pressureValue = new QLabel("--- bar", gridWidget);
+    m_pressureValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(pressureLabel, 6, 0);
+    gridLayout->addWidget(m_pressureValue, 6, 1);
+
+    // Speed of Sound
+    QLabel* sosLabel = new QLabel("Sound Speed:", gridWidget);
+    sosLabel->setStyleSheet(labelStyle);
+    m_sosValue = new QLabel("--- m/s", gridWidget);
+    m_sosValue->setStyleSheet(valueStyle);
+    gridLayout->addWidget(sosLabel, 7, 0);
+    gridLayout->addWidget(m_sosValue, 7, 1);
+
+    sonarLayout->addWidget(gridWidget);
+    mainLayout->addWidget(sonarDataFrame);
+
+    // ===========================================
+    // HEX VIEWER SECTION
+    // ===========================================
+
+    // Hex Viewer başlık frame'i
+    QFrame* hexFrame = new QFrame(m_hexContainer);
+    hexFrame->setFrameStyle(QFrame::Box | QFrame::Raised);
+    hexFrame->setStyleSheet(
+        "QFrame {"
+        "   background-color: #2a2a2a;"
+        "   border: 2px solid #0066CC;"
+        "   border-radius: 8px;"
+        "   margin: 2px;"
+        "}"
+        );
+
+    QVBoxLayout* hexLayout = new QVBoxLayout(hexFrame);
+    hexLayout->setContentsMargins(10, 8, 10, 8);
+    hexLayout->setSpacing(6);
+
+    // Hex Viewer başlığı
+    QLabel* hexTitle = new QLabel("RAW PACKET DATA", hexFrame);
+    hexTitle->setStyleSheet(
+        "QLabel {"
+        "   font-weight: 700;"
+        "   font-size: 14px;"
+        "   font-family: 'Segoe UI', 'San Francisco', 'Helvetica Neue', 'Arial', sans-serif;"
+        "   color: #00FFFF;"
+        "   background-color: #003366;"
+        "   padding: 6px;"
+        "   border-radius: 4px;"
+        "   border: 1px solid #0066CC;"
+        "}"
+        );
+    hexTitle->setAlignment(Qt::AlignCenter);
+    hexLayout->addWidget(hexTitle);
+
+    // Hex viewer text browser'ı oluştur
+    m_hexViewer = new QTextBrowser(hexFrame);
+    m_hexViewer->setFont(QFont("JetBrains Mono, Fira Code, SF Mono, Monaco, Inconsolata, Roboto Mono, Source Code Pro, Consolas", 9));
+    m_hexViewer->setMinimumHeight(200);
+
+    // Dark color palette with green text
+    QPalette palette = m_hexViewer->palette();
+    palette.setColor(QPalette::Base, QColor(20, 20, 20));
+    palette.setColor(QPalette::Text, QColor(0, 255, 100));
+    m_hexViewer->setPalette(palette);
+
+    m_hexViewer->setStyleSheet(
+        "QTextBrowser {"
+        "   background-color: #141414;"
+        "   color: #00FF64;"
+        "   border: 1px solid #333333;"
+        "   border-radius: 4px;"
+        "   padding: 4px;"
+        "   selection-background-color: #0066CC;"
+        "}"
+        );
+
+    // Set document properties to limit memory usage
+    QTextDocument* doc = m_hexViewer->document();
+    doc->setMaximumBlockCount(500);
+
+    m_hexViewer->setAcceptRichText(false);
+    m_hexViewer->setPlainText("Hex Viewer Ready - Waiting for packet data...\nPress 'X' to toggle visibility");
+
+    hexLayout->addWidget(m_hexViewer);
+    mainLayout->addWidget(hexFrame);
+
+    // ===========================================
+    // CONTROL BUTTONS SECTION
+    // ===========================================
+
+    // Button'lar için horizontal layout oluştur
+    QHBoxLayout* buttonLayout = new QHBoxLayout();
+    buttonLayout->setSpacing(8);
+    buttonLayout->setContentsMargins(5, 0, 5, 5);
+
+    // Button stili tanımla - sonar temalı
+    QString buttonStyle =
+        "QPushButton {"
+        "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #01498E, stop:1 #003366);"
+        "   color: #ffffff;"
+        "   border: 2px solid #0066CC;"
+        "   border-radius: 6px;"
+        "   padding: 8px 16px;"
+        "   font-size: 12px;"
+        "   font-weight: 600;"
+        "   font-family: 'Segoe UI', 'San Francisco', 'Helvetica Neue', 'Arial', sans-serif;"
+        "   min-width: 70px;"
+        "}"
+        "QPushButton:hover {"
+        "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0066CC, stop:1 #01498E);"
+        "   border-color: #0080FF;"
+        "   color: #CCFFFF;"
+        "}"
+        "QPushButton:pressed {"
+        "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #003366, stop:1 #001133);"
+        "   border-color: #004488;"
+        "}"
+        "QPushButton:disabled {"
+        "   background-color: #404040;"
+        "   color: #808080;"
+        "   border-color: #606060;"
+        "}";
+
+    // Send Ping button oluştur
+    QPushButton* sendPingBtn = new QPushButton("PING", m_hexContainer);
+    sendPingBtn->setStyleSheet(buttonStyle);
+    sendPingBtn->setToolTip("Send ping to sonar device");
+
+    // Clear button oluştur
+    QPushButton* clearBtn = new QPushButton("CLEAR", m_hexContainer);
+    clearBtn->setStyleSheet(buttonStyle);
+    clearBtn->setToolTip("Clear hex viewer data");
+
+    // Exit button oluştur
+    QPushButton* exitBtn = new QPushButton("CLOSE", m_hexContainer);
+    exitBtn->setStyleSheet(buttonStyle);
+    exitBtn->setToolTip("Close data monitor");
+
+    // Button'ları layout'a ekle
+    buttonLayout->addWidget(sendPingBtn);
+    buttonLayout->addWidget(clearBtn);
+    buttonLayout->addWidget(exitBtn);
+
+    // Ana layout'a button layout'ını ekle
+    mainLayout->addLayout(buttonLayout);
+
+    // Default olarak görünür yap
+    m_showHexViewer = true;
+    m_hexContainer->setVisible(true);
+
+    // Button click connectionları
+    connect(sendPingBtn, &QPushButton::clicked, this, &MainView::OnSendPingClicked);
+    connect(clearBtn, &QPushButton::clicked, this, &MainView::OnClearHexViewer);
+    connect(exitBtn, &QPushButton::clicked, this, &MainView::OnExitHexViewer);
+}
+
 QString MainView::FormatHexData(OsBufferEntry* pEntry)
 {
     if (!pEntry) {
+        // Clear all labels when no data
+        if (m_pingIdValue) m_pingIdValue->setText("---");
+        if (m_packetSizeValue) m_packetSizeValue->setText("--- bytes");
+        if (m_rangesValue) m_rangesValue->setText("---");
+        if (m_beamsValue) m_beamsValue->setText("---");
+        if (m_frequencyValue) m_frequencyValue->setText("--- Hz");
+        if (m_temperatureValue) m_temperatureValue->setText("--- °C");
+        if (m_pressureValue) m_pressureValue->setText("--- bar");
+        if (m_sosValue) m_sosValue->setText("--- m/s");
+
         return QString("No data available");
     }
 
-    quint32 displaySize = (quint32)m_maxHexBytes;
+    // Update the sonar data labels
+    if (m_pingIdValue) {
+        m_pingIdValue->setText(QString::number(pEntry->m_rfm.pingId));
+    }
+
+    if (m_packetSizeValue) {
+        m_packetSizeValue->setText(QString("%1 bytes").arg(pEntry->m_rawSize));
+    }
+
+    if (m_rangesValue) {
+        m_rangesValue->setText(QString::number(pEntry->m_rfm.nRanges));
+    }
+
+    if (m_beamsValue) {
+        m_beamsValue->setText(QString::number(pEntry->m_rfm.nBeams));
+    }
+
+    if (m_frequencyValue) {
+        // Format frequency with proper units
+        double freq = pEntry->m_rfm.frequency;
+        if (freq >= 1000000) {
+            m_frequencyValue->setText(QString("%1 MHz").arg(freq / 1000000.0, 0, 'f', 2));
+        } else if (freq >= 1000) {
+            m_frequencyValue->setText(QString("%1 kHz").arg(freq / 1000.0, 0, 'f', 1));
+        } else {
+            m_frequencyValue->setText(QString("%1 Hz").arg(freq, 0, 'f', 0));
+        }
+    }
+
+    if (m_temperatureValue) {
+        m_temperatureValue->setText(QString("%1 °C").arg(pEntry->m_rfm.temperature, 0, 'f', 1));
+    }
+
+    if (m_pressureValue) {
+        m_pressureValue->setText(QString("%1 bar").arg(pEntry->m_rfm.pressure, 0, 'f', 2));
+    }
+
+    if (m_sosValue) {
+        m_sosValue->setText(QString("%1 m/s").arg(pEntry->m_rfm.speedOfSoundUsed, 0, 'f', 1));
+    }
+
+    // Generate hex dump for the text browser
+    quint32 displaySize = qMin((quint32)m_maxHexBytes, (quint32)pEntry->m_rawSize);
 
     QString result;
-    result += QString("SONAR PACKET\n");
-    // result += QString("Timestamp: %1\n").arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz"));
-    result += QString("pingId: %1\n").arg(pEntry->m_rfm.pingId);
-    result += QString("Packet Size: %1 bytes\n").arg(pEntry->m_rawSize);
-    result += QString("Ranges: %1\n").arg(pEntry->m_rfm.nRanges);
-    result += QString("Beams: %1\n").arg(pEntry->m_rfm.nBeams);
-    result += QString("Frequency: %1 Hz\n").arg(pEntry->m_rfm.frequency);
-    result += QString("Temperature: %1 °C\n").arg(pEntry->m_rfm.temperature);
-    result += QString("Presuure: %1 bar\n").arg(pEntry->m_rfm.pressure);
-    result += QString("SpeedOfSoundUsed: %1 m/s\n").arg(pEntry->m_rfm.speedOfSoundUsed);
+    QDateTime currentTime = QDateTime::currentDateTime();
+    // Basic packet info
+    result += QString("Timestamp: %1\n").arg(currentTime.toString("yyyy-MM-dd hh:mm:ss.zzz"));
+    result += QString("Total Size: %1 bytes (showing first %2)\n").arg(pEntry->m_rawSize).arg(displaySize);
 
     // Hex data section
     QByteArray rawData(reinterpret_cast<const char*>(pEntry->m_pRaw), displaySize);
     QString hexDump;
+
     for (int i = 0; i < displaySize; i += 16) {
         // Format offset (8-digit hex)
-        hexDump += QString("%1: ").arg(i, 8, 16, QLatin1Char('0'));
+        hexDump += QString("%1: ").arg(i, 8, 16, QLatin1Char('0')).toUpper();
 
-        // Hex bytes (16 per line)
+        // Hex bytes (16 per line) with color coding
+        QString hexLine;
+        QString asciiLine;
+
         for (int j = 0; j < 16; ++j) {
             int idx = i + j;
             if (idx < displaySize) {
-                hexDump += QString("%1 ").arg(static_cast<quint8>(rawData[idx]), 2, 16, QLatin1Char('0'));
+                quint8 byte = static_cast<quint8>(rawData[idx]);
+                hexLine += QString("%1 ").arg(byte, 2, 16, QLatin1Char('0')).toUpper();
             } else {
-                hexDump += "   "; // Pad for alignment
+                hexLine += "   "; // Pad for alignment
             }
         }
 
-        // ASCII representation
-        hexDump += " ";
-        for (int j = 0; j < 16; ++j) {
-            int idx = i + j;
-            if (idx < displaySize) {
-                char c = rawData[idx];
-                hexDump += (c >= 32 && c <= 126) ? QChar::fromLatin1(c) : '.';
-            }
-        }
-        hexDump += "\n";
+        hexDump += hexLine + "\n";
     }
-    result += hexDump;
 
+    result += hexDump;
     return result;
 }
 
@@ -1534,7 +1779,7 @@ void MainView::resizeEvent(QResizeEvent* event)
     QRect r = rect();
 
     // Hex container'ın görünür olup olmadığına göre alan hesapla
-    int hexWidth = m_showHexViewer ? (r.width() / 5) : 0;
+    int hexWidth = m_showHexViewer ? (r.width() / 5 + 50) : 0;
     int leftWidth = r.width() - hexWidth;
 
     // Sol alan (sonar için) - sadece sonar display için
