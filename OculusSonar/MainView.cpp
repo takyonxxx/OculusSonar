@@ -183,7 +183,7 @@ MainView::MainView(QWidget *parent) :
 
     // YOLO Detection initialization
     m_yoloDetector = new YOLO_V8();
-    QString modelPath = QCoreApplication::applicationDirPath() + "/sonar.onnx";
+    QString modelPath = QCoreApplication::applicationDirPath() + "/sonar_model.onnx";
     
     if (QFile::exists(modelPath)) {
         m_yoloParams.rectConfidenceThreshold = 0.9f;
@@ -779,22 +779,39 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                 m_yoloDetector->RunSession(sonarImage, results);
                 
                 if (!results.empty()) {
-                    // DL_RESULT → SonarSurface::DetectedObject (QList)
+                    // DL_RESULT → SonarSurface::DetectedObject (Polar koordinat)
                     QList<SonarSurface::DetectedObject> detections;
                     
-                    float pixelToMeterX = (float)range / width;
-                    float pixelToMeterY = (float)range / height;
+                    float rangePerPixel = (float)range / height;
                     
                     for (const auto& det : results) {
                         SonarSurface::DetectedObject obj;
                         
-                        // Pixel → Meter (merkez koordinat)
-                        float centerX = (det.box.x + det.box.width / 2.0f) * pixelToMeterX;
-                        float centerY = (det.box.y + det.box.height / 2.0f) * pixelToMeterY;
+                        // Box merkezi (pixel)
+                        float centerPixelX = det.box.x + det.box.width / 2.0f;
+                        float centerPixelY = det.box.y + det.box.height / 2.0f;
                         
-                        obj.meterPos = QPointF(centerX, centerY);
-                        obj.meterWidth = det.box.width * pixelToMeterX;
-                        obj.meterHeight = det.box.height * pixelToMeterY;
+                        // Bearing açısı (radyan) - bearing tablosundan al
+                        int bearingIndex = (int)(centerPixelX);
+                        if (bearingIndex >= width) bearingIndex = width - 1;
+                        if (bearingIndex < 0) bearingIndex = 0;
+                        
+                        float bearing = 0.0f;
+                        if (pEntry->m_pBrgs) {
+                            // Bearing short olarak saklanıyor (0.01 derece cinsinden)
+                            bearing = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
+                        }
+                        
+                        // Mesafe (range) - pixel'den metre'ye
+                        float distance = centerPixelY * rangePerPixel;
+                        
+                        // Polar → Kartezyen (sonar koordinat sistemi)
+                        float x = distance * sin(bearing);
+                        float y = distance * cos(bearing);
+                        
+                        obj.meterPos = QPointF(x, y);
+                        obj.meterWidth = det.box.width * rangePerPixel;
+                        obj.meterHeight = det.box.height * rangePerPixel;
                         obj.confidence = det.confidence;
                         
                         detections.append(obj);
@@ -2018,6 +2035,13 @@ void MainView::CreateYoloCheckbox()
 void MainView::OnYoloCheckboxToggled(bool checked)
 {
     m_yoloEnabled = checked;
+    
+    // Unchecked olunca detections'ları temizle
+    if (!checked && m_pSonarSurface) {
+        QList<SonarSurface::DetectedObject> emptyList;
+        m_pSonarSurface->SetDetections(emptyList);
+    }
+    
     qDebug() << "YOLO detection:" << (checked ? "ENABLED" : "DISABLED");
 }
 
