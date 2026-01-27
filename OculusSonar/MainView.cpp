@@ -58,7 +58,8 @@ MainView::MainView(QWidget *parent) :
     m_maxHexBytes(64),
     m_yoloCheckbox(nullptr),
     m_yoloDetector(nullptr),
-    m_yoloEnabled(false)
+    m_yoloEnabled(false),
+    m_renderCounter(0)
 {
     // Allow the size grip to resize the form when in "normal" mode
     counter = 0;
@@ -184,16 +185,16 @@ MainView::MainView(QWidget *parent) :
     // YOLO Detection initialization
     m_yoloDetector = new YOLO_V8();
     QString modelPath = QCoreApplication::applicationDirPath() + "/sonar_model.onnx";
-    
+
     if (QFile::exists(modelPath)) {
-        m_yoloParams.rectConfidenceThreshold = 0.9f;
+        m_yoloParams.rectConfidenceThreshold = 0.3f;
         m_yoloParams.iouThreshold = 0.5f;
         m_yoloParams.modelPath = modelPath.toStdString();
         m_yoloParams.imgSize = { 512, 512 };
         m_yoloParams.modelType = YOLO_DETECT_V8;
-        
+
         bool success = m_yoloDetector->CreateSession(m_yoloParams);
-        
+
         if (success) {
             m_yoloEnabled = true;
             qDebug() << "YOLO detection enabled";
@@ -207,7 +208,7 @@ MainView::MainView(QWidget *parent) :
         m_yoloDetector = nullptr;
         m_yoloEnabled = false;
     }
-    
+
     // Create YOLO checkbox
     CreateYoloCheckbox();
 }
@@ -770,57 +771,68 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        // YOLO OBJECT DETECTION - SonarSurface'e gönder
+        static qint64 lastSaveTime = 0;
+        qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+        if (currentTime - lastSaveTime >= 500) {
+            SaveRenderedSonarImage_NoGrid();
+            lastSaveTime = currentTime;
+        }
+
+        // YOLO OBJECT DETECTION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
             try {
                 cv::Mat sonarImage(height, width, CV_8UC1, pEntry->m_pImage);
-                
+
                 std::vector<DL_RESULT> results;
                 m_yoloDetector->RunSession(sonarImage, results);
-                
+
                 if (!results.empty()) {
-                    // DL_RESULT → SonarSurface::DetectedObject (Polar koordinat)
+                    // Sort by confidence (descending)
+                    std::sort(results.begin(), results.end(),
+                        [](const DL_RESULT& a, const DL_RESULT& b) {
+                            return a.confidence > b.confidence;
+                        });
+
+                    int maxDetections = 10;
+                    int numToShow = std::min((int)results.size(), maxDetections);
+
                     QList<SonarSurface::DetectedObject> detections;
-                    
-                    float rangePerPixel = (float)range / height;
-                    
-                    for (const auto& det : results) {
-                        SonarSurface::DetectedObject obj;
-                        
-                        // Box merkezi (pixel)
+
+                    for (int i = 0; i < numToShow; i++) {
+                        const auto& det = results[i];
+
                         float centerPixelX = det.box.x + det.box.width / 2.0f;
                         float centerPixelY = det.box.y + det.box.height / 2.0f;
-                        
-                        // Bearing açısı (radyan) - bearing tablosundan al
+
+                        if (centerPixelX < 0 || centerPixelX >= width) continue;
+                        if (centerPixelY < 0 || centerPixelY >= height) continue;
+
                         int bearingIndex = (int)(centerPixelX);
-                        if (bearingIndex >= width) bearingIndex = width - 1;
                         if (bearingIndex < 0) bearingIndex = 0;
-                        
-                        float bearing = 0.0f;
+                        if (bearingIndex >= width) bearingIndex = width - 1;
+
+                        float bearingRad = 0.0f;
                         if (pEntry->m_pBrgs) {
-                            // Bearing short olarak saklanıyor (0.01 derece cinsinden)
-                            bearing = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
+                            bearingRad = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
                         }
-                        
-                        // Mesafe (range) - pixel'den metre'ye
-                        float distance = centerPixelY * rangePerPixel;
-                        
-                        // Polar → Kartezyen (sonar koordinat sistemi)
-                        float x = distance * sin(bearing);
-                        float y = distance * cos(bearing);
-                        
+
+                        float distance = (centerPixelY / (float)height) * range;
+
+                        float x = distance * sin(bearingRad);
+                        float y = distance * cos(bearingRad);
+
+                        SonarSurface::DetectedObject obj;
                         obj.meterPos = QPointF(x, y);
-                        obj.meterWidth = det.box.width * rangePerPixel;
-                        obj.meterHeight = det.box.height * rangePerPixel;
+                        obj.meterWidth = (det.box.width / (float)width) * range * 0.15f;
+                        obj.meterHeight = (det.box.height / (float)height) * range * 0.15f;
                         obj.confidence = det.confidence;
-                        
+
                         detections.append(obj);
                     }
-                    
-                    // SonarSurface'e gönder
+
                     m_pSonarSurface->SetDetections(detections);
                 }
-                
+
             } catch (const std::exception& e) {
                 qDebug() << "YOLO ERROR:" << e.what();
                 m_yoloEnabled = false;
@@ -842,58 +854,109 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
     }
 }
 
-// void MainView::saveImageAsPng(int height, int width, uchar* image, const QString& directoryPath)
-// {
-//     // Create QImage using the raw uchar buffer (Format_Grayscale8 = 1 byte per pixel)
-//     QImage img(image, width, height, width, QImage::Format_Grayscale8);
-//     counter++;
-//     QString imagecount = QString::number(counter);
-
-//     // Create the full file path within the directory
-//     QString filename = QDir(directoryPath).absoluteFilePath("sonar_" + imagecount + ".png");
-
-//     // Save to PNG
-//     if (!img.save(filename)) {
-//         qDebug() << "Failed to save image:" << filename;
-//     } else {
-//         qDebug() << "Saved image:" << filename << "Size:" << width << "x" << height;
-//     }
-// }
-
-void MainView::saveImageAsPng(int height, int width, uchar* image, const QString& directoryPath)
+void MainView::saveImageAsPng(int height, int width, uchar* image,
+                              short* bearings, double range,
+                              const QString& directoryPath)
 {
-    // Create grayscale QImage from raw buffer
-    QImage grayscaleImg(image, width, height, width, QImage::Format_Grayscale8);
+    int size = 512;
+    cv::Mat cartesian = cv::Mat::zeros(size, size, CV_8UC1);
+    cv::Mat weightMap = cv::Mat::zeros(size, size, CV_32FC1);
 
-    // Create colored image using RGB32 format
-    QImage coloredImg(width, height, QImage::Format_RGB32);
+    int centerX = size / 2;
+    int centerY = size;
 
-    // Apply blue-yellow color map typical for sonar images
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            // Get grayscale value (0-255)
-            uchar grayValue = grayscaleImg.pixelColor(x, y).red();
+    // IMPROVED: Accumulate pixel values with weights
+    for (int b = 0; b < width; b++) {
+        float bearingRad = bearings[b] * 0.01f * M_PI / 180.0f;
 
-            // Convert to 0-1 range
-            float intensity = grayValue / 255.0f;
+        for (int r = 0; r < height; r++) {
+            float distance = (r / (float)height) * range;
 
-            // Apply sonar-like color mapping
-            QColor color = applySonarColorMap(intensity);
-            coloredImg.setPixelColor(x, y, color);
+            int x = centerX + (int)(distance * sin(bearingRad) * (size / (2.0 * range)));
+            int y = centerY - (int)(distance * cos(bearingRad) * (size / range));
+
+            if (x >= 0 && x < size && y >= 0 && y < size) {
+                uchar pixel = image[r * width + b];
+
+                // Accumulate
+                cartesian.at<uchar>(y, x) = std::max(cartesian.at<uchar>(y, x), pixel);
+                weightMap.at<float>(y, x) += 1.0f;
+            }
         }
     }
 
+    // IMPROVED: Fill holes with inpainting
+    cv::Mat mask = cv::Mat::zeros(size, size, CV_8UC1);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            if (cartesian.at<uchar>(y, x) == 0 && y < centerY) {
+                mask.at<uchar>(y, x) = 255;
+            }
+        }
+    }
+
+    cv::Mat inpainted;
+    cv::inpaint(cartesian, mask, inpainted, 3, cv::INPAINT_TELEA);
+
+    // IMPROVED: Denoise
+    cv::Mat denoised;
+    cv::fastNlMeansDenoising(inpainted, denoised, 10, 7, 21);
+
+    // IMPROVED: Enhance contrast
+    cv::Mat enhanced;
+    cv::equalizeHist(denoised, enhanced);
+
+    // OPTIONAL: Apply CLAHE for better local contrast
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+    clahe->apply(enhanced, enhanced);
+
     counter++;
-    QString imagecount = QString::number(counter);
+    QString filename = QDir(directoryPath).absoluteFilePath("sonar_enhanced_" + QString::number(counter) + ".png");
+    cv::imwrite(filename.toStdString(), enhanced);
+}
 
-    // Create the full file path within the directory
-    QString filename = QDir(directoryPath).absoluteFilePath("sonar_" + imagecount + ".png");
-
-    // Save colored image to PNG
-    if (!coloredImg.save(filename)) {
-        qDebug() << "Failed to save image:" << filename;
+void MainView::SaveRenderedSonarImage_NoGrid()
+{
+    if (!m_pSonarSurface) return;
+    
+    bool gridWasEnabled = m_pSonarSurface->m_showGrid;
+    bool dwGridWasEnabled = m_pSonarSurface->m_dwGrid;
+    bool gridTextWasEnabled = m_pSonarSurface->m_dwGridText;
+    
+    m_pSonarSurface->m_showGrid = false;
+    m_pSonarSurface->m_dwGrid = false;
+    m_pSonarSurface->m_dwGridText = false;
+    m_fanDisplay.update();
+    QCoreApplication::processEvents();
+    
+    QImage img = m_fanDisplay.grabFramebuffer();
+    
+    m_pSonarSurface->m_showGrid = gridWasEnabled;
+    m_pSonarSurface->m_dwGrid = dwGridWasEnabled;
+    m_pSonarSurface->m_dwGridText = gridTextWasEnabled;
+    
+    if (!img.isNull()) {
+        m_renderCounter++;
+        QString filename = QDir(sonarImageDir).absoluteFilePath(
+            QString("sonar_clean_%1.png").arg(m_renderCounter, 5, 10, QChar('0'))
+        );
+        img.save(filename, "PNG");
     }
 }
+
+void MainView::SaveRenderedSonarImage()
+{
+    QImage img = m_fanDisplay.grabFramebuffer();
+    
+    if (!img.isNull()) {
+        m_renderCounter++;
+        QString filename = QDir(sonarImageDir).absoluteFilePath(
+            QString("sonar_grid_%1.png").arg(m_renderCounter, 5, 10, QChar('0'))
+        );
+        img.save(filename, "PNG");
+    }
+}
+
 
 // Helper function to apply sonar color mapping
 QColor MainView::applySonarColorMap(float intensity)
@@ -2000,7 +2063,7 @@ void MainView::CreateYoloCheckbox()
     m_yoloCheckbox = new QCheckBox("YOLO Detection", this);
     m_yoloCheckbox->setGeometry(10, 120, 150, 25);  // Sol üst, 3 satır alta
     m_yoloCheckbox->setChecked(m_yoloEnabled);
-    
+
     m_yoloCheckbox->setStyleSheet(
         "QCheckBox {"
         "   color: #00FFFF;"
@@ -2025,23 +2088,23 @@ void MainView::CreateYoloCheckbox()
         "   border-radius: 3px;"
         "}"
     );
-    
-    connect(m_yoloCheckbox, &QCheckBox::toggled, 
+
+    connect(m_yoloCheckbox, &QCheckBox::toggled,
             this, &MainView::OnYoloCheckboxToggled);
-    
+
     m_yoloCheckbox->show();
 }
 
 void MainView::OnYoloCheckboxToggled(bool checked)
 {
     m_yoloEnabled = checked;
-    
+
     // Unchecked olunca detections'ları temizle
     if (!checked && m_pSonarSurface) {
         QList<SonarSurface::DetectedObject> emptyList;
         m_pSonarSurface->SetDetections(emptyList);
     }
-    
+
     qDebug() << "YOLO detection:" << (checked ? "ENABLED" : "DISABLED");
 }
 

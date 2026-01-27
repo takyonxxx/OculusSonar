@@ -185,7 +185,11 @@ signals:
 public slots:
     void NewStatusMsg(OculusStatusMsg osm, quint16 valid, quint16 invalid);
     void NewReturnFire(OsBufferEntry* pEntry);
-    void saveImageAsPng(int height, int width, uchar* image, const QString& filename);
+    void saveImageAsPng(int height, int width, uchar* image,
+                        short* bearings, double range,
+                        const QString& directoryPath);
+    void SaveRenderedSonarImage_NoGrid();
+    void SaveRenderedSonarImage();
     QColor applySonarColorMap(float intensity);
     void NewUserConfig(UserConfig config);
     void FireSonar();
@@ -243,4 +247,5 @@ private:
     YOLO_V8*       m_yoloDetector;
     DL_INIT_PARAM  m_yoloParams;
     bool           m_yoloEnabled;
+    int            m_renderCounter;
 };

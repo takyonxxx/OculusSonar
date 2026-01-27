@@ -52,7 +52,6 @@ bool YOLO_V8::CreateSession(DL_INIT_PARAM& params) {
 
 void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
     try {
-        // Convert to RGB
         cv::Mat rgbImg;
         if (img.channels() == 1) {
             cv::cvtColor(img, rgbImg, cv::COLOR_GRAY2RGB);
@@ -63,26 +62,19 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
             return;
         }
         
-        // Resize
         cv::Mat resized;
         cv::resize(rgbImg, resized, cv::Size(params.imgSize[0], params.imgSize[1]));
         
-        // Normalize
         resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
         
-        // Allocate blob
         int channels = 3;
         int width = params.imgSize[0];
         int height = params.imgSize[1];
         size_t totalSize = channels * width * height;
         
         blob = new float[totalSize];
+        if (!blob) return;
         
-        if (!blob) {
-            return;
-        }
-        
-        // Convert HWC to CHW
         for (int c = 0; c < channels; ++c) {
             for (int h = 0; h < height; ++h) {
                 for (int w = 0; w < width; ++w) {
@@ -116,7 +108,6 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
         float scaleX = (float)originalWidth / params.imgSize[0];
         float scaleY = (float)originalHeight / params.imgSize[1];
         
-        // Sigmoid activation
         auto sigmoid = [](float x) { return 1.0f / (1.0f + std::exp(-x)); };
         
         for (int i = 0; i < numDetections; ++i) {
@@ -136,7 +127,6 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                 int width = (int)(w * scaleX);
                 int height = (int)(h * scaleY);
                 
-                // Bounds
                 if (x < 0) x = 0;
                 if (y < 0) y = 0;
                 if (x + width > originalWidth) width = originalWidth - x;
