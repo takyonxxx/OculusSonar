@@ -188,11 +188,12 @@ MainView::MainView(QWidget *parent) :
 
     if (QFile::exists(modelPath)) {
         // Roboflow validation: max threshold 38% for all objects
-        m_yoloParams.rectConfidenceThreshold = 0.25;  // Match Roboflow validation
-        m_yoloParams.iouThreshold = 0.45f;              // Slightly lower for overlapping
+        m_yoloParams.rectConfidenceThreshold = 0.25;
+        m_yoloParams.iouThreshold = 0.45f;
         m_yoloParams.modelPath = modelPath.toStdString();
         m_yoloParams.imgSize = { 640, 640 };
         m_yoloParams.modelType = YOLO_DETECT_V8;
+        m_yoloParams.classNames = {"kutu"};
 
         qDebug() << "YOLO Config: confidence=" << m_yoloParams.rectConfidenceThreshold
                  << "iou=" << m_yoloParams.iouThreshold;
@@ -814,8 +815,6 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
 
                     QList<SonarSurface::DetectedObject> detections;
 
-                    qDebug() << "=== Processing" << numToShow << "detections for display ===";
-
                     for (int i = 0; i < numToShow; i++) {
                         const auto& det = results[i];
 
@@ -863,12 +862,6 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                         obj.confidence = det.confidence;
 
                         detections.append(obj);
-
-                        qDebug() << "Detection" << i << ":";
-                        qDebug() << "  Pixel: (" << det.box.x << "," << det.box.y
-                                 << ") Size:" << det.box.width << "x" << det.box.height;
-                        qDebug() << "  Meter: (" << x << "," << y << ") Distance:" << distance;
-                        qDebug() << "  Confidence:" << det.confidence;
                     }
 
                     // Update display

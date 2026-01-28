@@ -216,3 +216,5 @@ unix {
 
 # # 5. Kontrol
 # docker-compose ps
+#pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#pip install ultralytics

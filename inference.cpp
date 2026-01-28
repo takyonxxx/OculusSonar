@@ -1,7 +1,6 @@
 #include "inference.h"
 #include <algorithm>
 #include <numeric>
-#include <QDebug>
 
 YOLO_V8::YOLO_V8() {}
 
@@ -37,26 +36,32 @@ bool YOLO_V8::CreateSession(DL_INIT_PARAM& params) {
             outputNodeNames.push_back(outputNodeNamesPtr.back().get());
         }
 
-        // YOLOv8 output shape'ini kontrol et ve logla
+        // Multi-class support: numFeatures = 4 (bbox) + numClasses
         auto outputInfo = session->GetOutputTypeInfo(0);
         auto tensorInfo = outputInfo.GetTensorTypeAndShapeInfo();
         auto shape = tensorInfo.GetShape();
 
-        qDebug() << "=== YOLO Model Info ===";
-        qDebug() << "Output shape size:" << shape.size();
-        for (size_t i = 0; i < shape.size(); i++) {
-            qDebug() << "  Dim" << i << ":" << shape[i];
-        }
+        int numFeatures = static_cast<int>(shape[1]);
+        int numClasses = numFeatures - 4;
 
-        classes = {"Object"};
+        if (params.classNames.empty()) {
+            if (numClasses == 1) {
+                classes = {"Object"};
+            } else {
+                classes.clear();
+                for (int i = 0; i < numClasses; i++) {
+                    classes.push_back("Class_" + std::to_string(i));
+                }
+            }
+        } else {
+            classes = params.classNames;
+        }
 
         return true;
 
     } catch (const Ort::Exception& e) {
-        qDebug() << "ONNX Runtime Exception:" << e.what();
         return false;
     } catch (const std::exception& e) {
-        qDebug() << "Exception:" << e.what();
         return false;
     }
 }
@@ -73,7 +78,6 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
             return;
         }
 
-        // Letterbox resize - preserve aspect ratio with padding
         int targetWidth = params.imgSize[0];
         int targetHeight = params.imgSize[1];
 
@@ -86,7 +90,6 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
         cv::Mat resized;
         cv::resize(rgbImg, resized, cv::Size(newWidth, newHeight));
 
-        // Create padded image (letterbox)
         cv::Mat padded(targetHeight, targetWidth, CV_8UC3, cv::Scalar(114, 114, 114));
 
         int padX = (targetWidth - newWidth) / 2;
@@ -94,11 +97,6 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
 
         resized.copyTo(padded(cv::Rect(padX, padY, newWidth, newHeight)));
 
-        qDebug() << "Letterbox: original=" << rgbImg.cols << "x" << rgbImg.rows
-                 << ", resized=" << newWidth << "x" << newHeight
-                 << ", pad=(" << padX << "," << padY << ")";
-
-        // Normalize to [0, 1]
         padded.convertTo(padded, CV_32FC3, 1.0 / 255.0);
 
         int channels = 3;
@@ -109,7 +107,6 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
         blob = new float[totalSize];
         if (!blob) return;
 
-        // Convert to CHW format (NCHW without batch)
         for (int c = 0; c < channels; ++c) {
             for (int h = 0; h < height; ++h) {
                 for (int w = 0; w < width; ++w) {
@@ -120,7 +117,6 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
         }
 
     } catch (const std::exception& e) {
-        qDebug() << "Preprocess error:" << e.what();
         if (blob) {
             delete[] blob;
             blob = nullptr;
@@ -130,38 +126,23 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
 
 void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                                 int originalWidth, int originalHeight) {
-    if (!output) {
-        qDebug() << "Output is NULL";
-        return;
-    }
+    if (!output) return;
 
     try {
         std::vector<cv::Rect> boxes;
         std::vector<float> confidences;
         std::vector<int> classIds;
 
-        // YOLOv8 output shape: [1, num_features, num_predictions]
         auto outputInfo = session->GetOutputTypeInfo(0);
         auto tensorInfo = outputInfo.GetTensorTypeAndShapeInfo();
         auto shape = tensorInfo.GetShape();
 
-        if (shape.size() < 3) {
-            qDebug() << "Invalid output shape size:" << shape.size();
-            return;
-        }
+        if (shape.size() < 3) return;
 
         int numFeatures = static_cast<int>(shape[1]);
         int numPredictions = static_cast<int>(shape[2]);
+        int numClasses = numFeatures - 4;
 
-        qDebug() << "=== Postprocess Info ===";
-        qDebug() << "Num Features:" << numFeatures << "(Expected: 4 bbox + 1 conf = 5)";
-        qDebug() << "Num Predictions:" << numPredictions;
-        qDebug() << "Original Image:" << originalWidth << "x" << originalHeight;
-        qDebug() << "Model Input Size:" << params.imgSize[0] << "x" << params.imgSize[1];
-        qDebug() << "Confidence Threshold:" << params.rectConfidenceThreshold << "(TUNED for better recall)";
-        qDebug() << "IOU Threshold:" << params.iouThreshold;
-
-        // Calculate letterbox parameters
         float scale = std::min((float)params.imgSize[0] / originalWidth,
                                (float)params.imgSize[1] / originalHeight);
 
@@ -170,46 +151,33 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
         int padX = (params.imgSize[0] - newWidth) / 2;
         int padY = (params.imgSize[1] - newHeight) / 2;
 
-        qDebug() << "Letterbox params: scale=" << scale
-                 << ", padded_size=" << newWidth << "x" << newHeight
-                 << ", offset=(" << padX << "," << padY << ")";
-
-        int validBoxes = 0;
-        int highConfBoxes = 0;
-        int zeroSizeRejected = 0;
-        int outOfBoundsRejected = 0;
-        int acceptedBoxes = 0;
-
-        qDebug() << "\n=== First 10 High-Confidence Detections ===";
-
         for (int i = 0; i < numPredictions; ++i) {
             float cx_norm = output[0 * numPredictions + i];
             float cy_norm = output[1 * numPredictions + i];
             float w_norm = output[2 * numPredictions + i];
             float h_norm = output[3 * numPredictions + i];
-            float confidence = output[4 * numPredictions + i];
 
-            validBoxes++;
+            // Multi-class: En yüksek confidence'lı sınıfı bul
+            int bestClassId = 0;
+            float bestConfidence = 0.0f;
+            for (int c = 0; c < numClasses; c++) {
+                float classConf = output[(4 + c) * numPredictions + i];
+                if (classConf > bestConfidence) {
+                    bestConfidence = classConf;
+                    bestClassId = c;
+                }
+            }
+            float confidence = bestConfidence;
 
             if (confidence >= params.rectConfidenceThreshold) {
-                highConfBoxes++;
+                float cx_pixel = cx_norm;
+                float cy_pixel = cy_norm;
+                float w_pixel = w_norm;
+                float h_pixel = h_norm;
 
-                // Model already outputs pixel coordinates (0-640), NOT normalized!
-                // No need to multiply by 640
-                float cx_pixel = cx_norm;  // Already in pixels
-                float cy_pixel = cy_norm;  // Already in pixels
-                float w_pixel = w_norm;    // Already in pixels
-                float h_pixel = h_norm;    // Already in pixels
+                float x1_unpadded = (cx_pixel - w_pixel / 2.0f) - padX;
+                float y1_unpadded = (cy_pixel - h_pixel / 2.0f) - padY;
 
-                // Remove letterbox padding (still in 640x640 space)
-                float x1_padded = cx_pixel - w_pixel / 2.0f;
-                float y1_padded = cy_pixel - h_pixel / 2.0f;
-
-                // Adjust for padding offset
-                float x1_unpadded = x1_padded - padX;
-                float y1_unpadded = y1_padded - padY;
-
-                // Scale from resized dimension to original image size
                 float x1_original = x1_unpadded / scale;
                 float y1_original = y1_unpadded / scale;
                 float w_original = w_pixel / scale;
@@ -220,95 +188,21 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                 int width = static_cast<int>(w_original);
                 int height = static_cast<int>(h_original);
 
-                // Debug first 10 high-confidence detections BEFORE any filtering
-                if (highConfBoxes <= 10) {
-                    qDebug() << "\nDetection #" << highConfBoxes << ":";
-                    qDebug() << "  Confidence:" << QString::number(confidence, 'f', 3);
-                    qDebug() << "  RAW (model output): cx=" << QString::number(cx_norm, 'f', 4)
-                             << "cy=" << QString::number(cy_norm, 'f', 4)
-                             << "w=" << QString::number(w_norm, 'f', 4)
-                             << "h=" << QString::number(h_norm, 'f', 4);
-                    qDebug() << "  Pixel (640x640): cx=" << QString::number(cx_pixel, 'f', 1)
-                             << "cy=" << QString::number(cy_pixel, 'f', 1)
-                             << "w=" << QString::number(w_pixel, 'f', 1)
-                             << "h=" << QString::number(h_pixel, 'f', 1);
-                    qDebug() << "  After unpad: x1=" << QString::number(x1_unpadded, 'f', 1)
-                             << "y1=" << QString::number(y1_unpadded, 'f', 1);
-                    qDebug() << "  BEFORE clamp: x=" << x << "y=" << y
-                             << "w=" << width << "h=" << height;
-                }
-
                 // Clamp to image boundaries
-                bool wasOutOfBounds = false;
-                if (x < 0) {
-                    width += x;
-                    x = 0;
-                    wasOutOfBounds = true;
-                }
-                if (y < 0) {
-                    height += y;
-                    y = 0;
-                    wasOutOfBounds = true;
-                }
-                if (x >= originalWidth) {
-                    wasOutOfBounds = true;
-                    x = originalWidth - 1;
-                    width = 1;
-                }
-                if (y >= originalHeight) {
-                    wasOutOfBounds = true;
-                    y = originalHeight - 1;
-                    height = 1;
-                }
-                if (x + width > originalWidth) {
-                    width = originalWidth - x;
-                }
-                if (y + height > originalHeight) {
-                    height = originalHeight - y;
-                }
+                if (x < 0) { width += x; x = 0; }
+                if (y < 0) { height += y; y = 0; }
+                if (x >= originalWidth) { x = originalWidth - 1; width = 1; }
+                if (y >= originalHeight) { y = originalHeight - 1; height = 1; }
+                if (x + width > originalWidth) { width = originalWidth - x; }
+                if (y + height > originalHeight) { height = originalHeight - y; }
 
-                if (highConfBoxes <= 10) {
-                    qDebug() << "  AFTER clamp: x=" << x << "y=" << y
-                             << "w=" << width << "h=" << height;
-                }
-
-                // Accept all valid boxes
                 if (width > 0 && height > 0) {
-                    // Calculate aspect ratio and relative size for logging
-                    float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
-                    float boxArea = static_cast<float>(width * height);
-                    float imageArea = static_cast<float>(originalWidth * originalHeight);
-                    float areaRatio = boxArea / imageArea;
-                    float yCenter = y + height / 2.0f;
-                    float yRatioFromTop = yCenter / static_cast<float>(originalHeight);
-
                     boxes.push_back(cv::Rect(x, y, width, height));
                     confidences.push_back(confidence);
-                    classIds.push_back(0);
-                    acceptedBoxes++;
-
-                    if (highConfBoxes <= 50) {
-                        qDebug() << "  AR=" << QString::number(aspectRatio, 'f', 2)
-                        << "Area=" << QString::number(areaRatio * 100, 'f', 1) << "%"
-                        << "X=" << x << "Y=" << y
-                        << "(" << QString::number(yRatioFromTop * 100, 'f', 0) << "% from top)";
-                        qDebug() << "  Status: ✓ ACCEPTED";
-                    }
-                } else {
-                    zeroSizeRejected++;
-                    if (highConfBoxes <= 10) {
-                        qDebug() << "  Status: ✗ REJECTED (zero/negative size)";
-                    }
+                    classIds.push_back(bestClassId);
                 }
             }
         }
-
-        qDebug() << "\n=== Summary ===";
-        qDebug() << "Valid boxes checked:" << validBoxes;
-        qDebug() << "High confidence boxes (>=" << params.rectConfidenceThreshold << "):" << highConfBoxes;
-        qDebug() << "Accepted boxes:" << acceptedBoxes;
-        qDebug() << "Rejected - size/shape issues:" << zeroSizeRejected;
-        qDebug() << "Boxes for NMS:" << boxes.size();
 
         // Apply Non-Maximum Suppression
         if (!boxes.empty()) {
@@ -316,57 +210,36 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
             cv::dnn::NMSBoxes(boxes, confidences, params.rectConfidenceThreshold,
                               params.iouThreshold, indices);
 
-            qDebug() << "After NMS:" << indices.size() << "detections";
-
             for (size_t i = 0; i < indices.size(); i++) {
                 int idx = indices[i];
                 DL_RESULT result;
-                result.classId = 0;
+                result.classId = classIds[idx];
                 result.confidence = confidences[idx];
                 result.box = boxes[idx];
+                result.className = (result.classId < static_cast<int>(classes.size()))
+                                   ? classes[result.classId] : "Unknown";
                 results.push_back(result);
-
-                qDebug() << "\nFinal Detection #" << (i+1) << ":";
-                qDebug() << "  Box: [" << result.box.x << "," << result.box.y
-                         << "," << result.box.width << "," << result.box.height << "]";
-                qDebug() << "  Confidence:" << result.confidence;
             }
-        } else {
-            qDebug() << "No boxes passed filters";
         }
 
-        qDebug() << "=== Inference Complete ===\n";
-
     } catch (const std::exception& e) {
-        qDebug() << "Postprocess error:" << e.what();
+        // Silent fail
     }
 }
 
 void YOLO_V8::RunSession(cv::Mat& inputImg, std::vector<DL_RESULT>& results) {
     results.clear();
 
-    if (!session || inputImg.empty()) {
-        qDebug() << "Session is NULL or input image is empty";
-        return;
-    }
-
-    qDebug() << "\n=== Running YOLO Inference ===";
-    qDebug() << "Input image size:" << inputImg.cols << "x" << inputImg.rows;
+    if (!session || inputImg.empty()) return;
 
     try {
         float* blob = nullptr;
 
         preprocessImage(inputImg, blob);
-        if (!blob) {
-            qDebug() << "Preprocessing failed";
-            return;
-        }
+        if (!blob) return;
 
         std::vector<int64_t> inputShape = {1, 3, params.imgSize[1], params.imgSize[0]};
         size_t tensorSize = 3 * params.imgSize[0] * params.imgSize[1];
-
-        qDebug() << "Input tensor shape: [" << inputShape[0] << "," << inputShape[1]
-                 << "," << inputShape[2] << "," << inputShape[3] << "]";
 
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(
             OrtAllocatorType::OrtArenaAllocator, OrtMemType::OrtMemTypeDefault);
@@ -375,7 +248,6 @@ void YOLO_V8::RunSession(cv::Mat& inputImg, std::vector<DL_RESULT>& results) {
             memoryInfo, blob, tensorSize,
             inputShape.data(), inputShape.size());
 
-        qDebug() << "Running inference...";
         auto outputTensors = session->Run(
             Ort::RunOptions{nullptr},
             inputNodeNames.data(), &inputTensor, 1,
@@ -383,18 +255,15 @@ void YOLO_V8::RunSession(cv::Mat& inputImg, std::vector<DL_RESULT>& results) {
 
         float* outputData = outputTensors[0].GetTensorMutableData<float>();
         if (!outputData) {
-            qDebug() << "Output data is NULL";
             delete[] blob;
             return;
         }
 
-        qDebug() << "Inference completed, postprocessing...";
         postprocessOutput(outputData, results, inputImg.cols, inputImg.rows);
 
         delete[] blob;
 
     } catch (const std::exception& e) {
-        qDebug() << "YOLO error:" << e.what();
         results.clear();
     }
 }

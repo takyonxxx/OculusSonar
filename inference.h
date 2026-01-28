@@ -12,12 +12,14 @@ struct DL_INIT_PARAM {
     std::vector<int> imgSize;
     float rectConfidenceThreshold;
     float iouThreshold;
+    std::vector<std::string> classNames;  // Multi-class: Sınıf isimleri listesi
 };
 
 struct DL_RESULT {
     int classId;
     float confidence;
     cv::Rect box;
+    std::string className;  // Multi-class: Sınıf ismi
 };
 
 enum MODEL_TYPE {

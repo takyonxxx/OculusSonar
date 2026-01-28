@@ -2,6 +2,7 @@
 """
 SONAR YOLO TRAINING - Windows/Linux
 Opset 21 ONNX export with optimized training parameters
+CUDA/GPU support with automatic detection
 """
 
 import os
@@ -10,14 +11,46 @@ from pathlib import Path
 import yaml
 
 print("=" * 60)
-print("SONAR YOLO TRAINING - IMPROVED")
+print("SONAR YOLO TRAINING - CUDA/GPU SUPPORTED")
 print("=" * 60)
 
 # 1. BASE DIRECTORY
 script_dir = Path(__file__).parent
 print(f"\nScript dizini: {script_dir}")
 
-# 2. ZIP DOSYASINI AÇ
+# 2. CUDA/GPU KONTROLÜ
+print("\n" + "=" * 60)
+print("GPU/CUDA KONTROLÜ")
+print("=" * 60)
+
+import torch
+
+if torch.cuda.is_available():
+    device = 0  # İlk GPU
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    print(f"✓ CUDA kullanılabilir!")
+    print(f"  GPU: {gpu_name}")
+    print(f"  VRAM: {gpu_memory:.1f} GB")
+    print(f"  CUDA Version: {torch.version.cuda}")
+    
+    # VRAM'a göre batch size ayarla
+    if gpu_memory >= 8:
+        batch_size = 16
+    elif gpu_memory >= 6:
+        batch_size = 12
+    elif gpu_memory >= 4:
+        batch_size = 8
+    else:
+        batch_size = 4
+    print(f"  Otomatik batch size: {batch_size}")
+else:
+    device = 'cpu'
+    batch_size = 8
+    print("✗ CUDA bulunamadı, CPU kullanılacak")
+    print("  (GPU ile 10-20x daha hızlı eğitim yapabilirsin)")
+
+# 3. ZIP DOSYASINI AÇ
 zip_file = script_dir / "sonar_model.zip"
 if not zip_file.exists():
     print(f"\n✗ HATA: {zip_file} bulunamadı!")
@@ -25,9 +58,8 @@ if not zip_file.exists():
     print(f"  {script_dir}")
     exit(1)
 
-print(f"✓ ZIP bulundu: {zip_file}")
+print(f"\n✓ ZIP bulundu: {zip_file}")
 
-# ZIP'i aç
 import zipfile
 extract_dir = script_dir / "dataset"
 if extract_dir.exists():
@@ -39,7 +71,7 @@ with zipfile.ZipFile(zip_file, 'r') as zip_ref:
     zip_ref.extractall(extract_dir)
 print(f"✓ Dataset açıldı: {extract_dir}")
 
-# 3. YOLO DATASET YAPISI OLUŞTUR
+# 4. YOLO DATASET YAPISI OLUŞTUR
 yolo_dir = script_dir / "yolo_dataset"
 if yolo_dir.exists():
     shutil.rmtree(yolo_dir)
@@ -49,7 +81,7 @@ if yolo_dir.exists():
 (yolo_dir / "val" / "images").mkdir(parents=True)
 (yolo_dir / "val" / "labels").mkdir(parents=True)
 
-# 4. GÖRÜNTÜLERİ KOPYALA
+# 5. GÖRÜNTÜLERİ KOPYALA
 print("\nGörüntüler kopyalanıyor...")
 
 images = sorted(list((extract_dir / "obj_Train_data").glob("*.png")))
@@ -59,7 +91,6 @@ if len(images) == 0:
     print("✗ HATA: Görüntü bulunamadı!")
     exit(1)
 
-# Split: 80% train, 20% val
 split_idx = int(len(images) * 0.8)
 train_images = images[:split_idx]
 val_images = images[split_idx:]
@@ -67,14 +98,12 @@ val_images = images[split_idx:]
 print(f"Train: {len(train_images)} görüntü")
 print(f"Val: {len(val_images)} görüntü")
 
-# Train
 for img in train_images:
     shutil.copy(img, yolo_dir / "train" / "images" / img.name)
     label = img.with_suffix('.txt')
     if label.exists():
         shutil.copy(label, yolo_dir / "train" / "labels" / label.name)
 
-# Validation
 for img in val_images:
     shutil.copy(img, yolo_dir / "val" / "images" / img.name)
     label = img.with_suffix('.txt')
@@ -83,15 +112,15 @@ for img in val_images:
 
 print("✓ Dosyalar kopyalandı")
 
-# 5. DATA.YAML
+# 6. DATA.YAML
 print("\ndata.yaml oluşturuluyor...")
 
 data_yaml = {
     'path': str(yolo_dir.absolute()),
     'train': 'train/images',
     'val': 'val/images',
-    'nc': 1,  # Number of classes
-    'names': ['Object']  # Class names
+    'nc': 1,
+    'names': ['Object']
 }
 
 with open(yolo_dir / "data.yaml", 'w') as f:
@@ -99,7 +128,7 @@ with open(yolo_dir / "data.yaml", 'w') as f:
 
 print(f"✓ data.yaml: {yolo_dir / 'data.yaml'}")
 
-# 6. ULTRALYTICS KONTROL
+# 7. ULTRALYTICS KONTROL
 print("\n" + "=" * 60)
 print("YOLOv8 KURULUMU")
 print("=" * 60)
@@ -114,109 +143,154 @@ except ImportError:
     from ultralytics import YOLO
     print("✓ Kurulum tamamlandı")
 
-# 7. TRAINING WITH IMPROVED PARAMETERS
+# 8. TRAINING
 print("\n" + "=" * 60)
 print("MODEL EĞİTİMİ BAŞLIYOR")
 print("=" * 60)
-print("\nİyileştirilmiş parametrelerle eğitim başlıyor...")
-print("Bu işlem 1-3 saat sürebilir (CPU'ya göre)\n")
+
+device_str = f"GPU ({gpu_name})" if device == 0 else "CPU"
+print(f"\nCihaz: {device_str}")
+print(f"Batch size: {batch_size}")
+
+if device == 0:
+    print("Tahmini süre: 10-30 dakika (GPU)")
+else:
+    print("Tahmini süre: 1-3 saat (CPU)")
+
+print("\nEğitim başlıyor...\n")
 
 model = YOLO('yolov8n.pt')
 
-# Improved training parameters for sonar detection
+# GPU için optimize edilmiş parametreler
+workers = 8 if device == 0 else 4
+
 results = model.train(
     data=str(yolo_dir / "data.yaml"),
-    epochs=150,              # Increased for better convergence
+    epochs=150,
     imgsz=640,
-    batch=8,                 # Adjust based on your RAM
+    batch=batch_size,
     name='sonar_model',
     project=str(script_dir / "runs"),
-    patience=25,             # Early stopping patience
+    patience=25,
     save=True,
-    device='cpu',            # Change to 'cuda' or '0' if you have GPU
-    workers=4,               # Increase if you have more CPU cores
+    device=device,
+    workers=workers,
     
-    # Optimization parameters
-    optimizer='Adam',        # Adam often works better for small datasets
-    lr0=0.001,              # Initial learning rate
-    lrf=0.01,               # Final learning rate
+    # Optimization
+    optimizer='Adam',
+    lr0=0.001,
+    lrf=0.01,
     momentum=0.937,
     weight_decay=0.0005,
     
-    # Augmentation (important for sonar images)
-    hsv_h=0.015,            # HSV hue augmentation
-    hsv_s=0.3,              # HSV saturation
-    hsv_v=0.2,              # HSV value
-    degrees=10.0,           # Rotation degrees
-    translate=0.1,          # Translation
-    scale=0.3,              # Scale augmentation
-    shear=0.0,              # Shear
-    perspective=0.0,        # Perspective
-    flipud=0.5,             # Flip up-down
-    fliplr=0.5,             # Flip left-right
-    mosaic=1.0,             # Mosaic augmentation
-    mixup=0.1,              # Mixup augmentation
+    # Augmentation
+    hsv_h=0.015,
+    hsv_s=0.3,
+    hsv_v=0.2,
+    degrees=10.0,
+    translate=0.1,
+    scale=0.3,
+    shear=0.0,
+    perspective=0.0,
+    flipud=0.5,
+    fliplr=0.5,
+    mosaic=1.0,
+    mixup=0.1,
     
-    # Other settings
+    # Other
     verbose=True,
     plots=True,
-    save_period=10          # Save checkpoint every 10 epochs
+    save_period=10,
+    
+    # GPU optimizations
+    amp=(device == 0),  # Automatic Mixed Precision (sadece GPU)
 )
 
-# 8. ONNX EXPORT WITH OPSET 21
+# 9. ONNX EXPORT
 print("\n" + "=" * 60)
 print("ONNX EXPORT - OPSET 21")
 print("=" * 60)
 
 best_pt = script_dir / "runs" / "sonar_model" / "weights" / "best.pt"
+onnx_exported = False
+
 if best_pt.exists():
     print(f"\n✓ Best model: {best_pt}")
     
     model = YOLO(str(best_pt))
     
-    # Export with opset 21 for compatibility
     onnx_path = model.export(
         format='onnx',
         imgsz=640,
         simplify=True,
-        opset=21,           # Opset 21 for better compatibility
-        dynamic=False       # Fixed input size for faster inference
+        opset=21,
+        dynamic=False
     )
     
     print(f"✓ ONNX export: {onnx_path}")
     
-    # Copy to project root as sonar_model.onnx (application looks for this name)
     output = script_dir / "sonar_model.onnx"
     shutil.copy(onnx_path, output)
     print(f"✓ Kaydedildi: {output}")
+    onnx_exported = True
     
-    # Print model info
-    import onnx
-    model_onnx = onnx.load(str(output))
-    print("\n=== ONNX Model Info ===")
-    print(f"Opset version: {model_onnx.opset_import[0].version}")
-    print(f"Input shape: {model_onnx.graph.input[0].type.tensor_type.shape}")
-    print(f"Output shape: {model_onnx.graph.output[0].type.tensor_type.shape}")
-    
+    try:
+        import onnx
+        model_onnx = onnx.load(str(output))
+        print(f"\n=== ONNX Model Info ===")
+        print(f"Opset version: {model_onnx.opset_import[0].version}")
+    except:
+        pass
 else:
     print("\n✗ best.pt bulunamadı!")
 
-# 9. ÖZET
+# 10. TEMİZLİK
+print("\n" + "=" * 60)
+print("TEMİZLİK YAPILIYOR")
+print("=" * 60)
+
+cleanup_dirs = [
+    script_dir / "dataset",
+    script_dir / "yolo_dataset",
+    script_dir / "runs",
+]
+
+cleanup_files = [
+    script_dir / "yolov8n.pt",
+]
+
+for dir_path in cleanup_dirs:
+    if dir_path.exists():
+        try:
+            shutil.rmtree(dir_path)
+            print(f"✓ Silindi: {dir_path.name}/")
+        except Exception as e:
+            print(f"✗ Silinemedi: {dir_path.name}/ - {e}")
+
+for file_path in cleanup_files:
+    if file_path.exists():
+        try:
+            file_path.unlink()
+            print(f"✓ Silindi: {file_path.name}")
+        except Exception as e:
+            print(f"✗ Silinemedi: {file_path.name} - {e}")
+
+# 11. ÖZET
 print("\n" + "=" * 60)
 print("TRAİNİNG TAMAMLANDI!")
 print("=" * 60)
-print(f"\nSONUÇLAR:")
-print(f"  Best Weights: {best_pt}")
-print(f"  ONNX Model: {script_dir / 'sonar_model.onnx'}")
-print(f"  Training Metrics: {script_dir / 'runs' / 'sonar_model' / 'results.csv'}")
-print(f"  Training Plots: {script_dir / 'runs' / 'sonar_model'}")
-print(f"\nSIRADAKI ADIMLAR:")
-print(f"  1. Eğitim sonuçlarını kontrol et (results.csv, confusion_matrix.png)")
-print(f"  2. sonar_model.onnx'i uygulama dizinine kopyala")
-print(f"     (build/release/sonar_model.onnx)")
-print(f"  3. Uygulamayı çalıştır ve test et!")
-print(f"\nÖNEMLİ:")
-print(f"  - Confidence threshold: 0.25-0.4 arası test et")
-print(f"  - IOU threshold: 0.4-0.6 arası test et")
-print(f"  - Sonar görüntülerinde objeler küçükse threshold'ları düşür")
+
+print(f"\nKALAN DOSYALAR:")
+print(f"  ✓ sonar_model.onnx  - Eğitilmiş model")
+print(f"  ✓ sonar_model.zip   - Orijinal dataset")
+print(f"  ✓ *.py              - Script dosyaları")
+
+if onnx_exported:
+    print(f"\nSONRAKİ ADIMLAR:")
+    print(f"  1. sonar_model.onnx'i uygulama dizinine kopyala")
+    print(f"     (build/release/sonar_model.onnx)")
+    print(f"  2. Uygulamayı çalıştır ve test et!")
+else:
+    print(f"\n✗ ONNX export başarısız!")
+
 print("=" * 60)
