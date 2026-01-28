@@ -787,9 +787,16 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
 
         // static qint64 lastSaveTime = 0;
         // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-        // if (currentTime - lastSaveTime >= 500) {
+        // if (currentTime - lastSaveTime >= 1000) {
         //     saveImageAsPng(height, width, pEntry->m_pImage,
         //                    pEntry->m_pBrgs, range, sonarImageDir);
+        //     lastSaveTime = currentTime;
+        // }
+
+        // static qint64 lastSaveTime = 0;
+        // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+        // if (currentTime - lastSaveTime >= 1000) {
+        //     SaveRenderedSonarImage_NoGrid();
         //     lastSaveTime = currentTime;
         // }
 
@@ -2168,52 +2175,59 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
     cv::Mat enhanced;
     clahe->apply(denoised, enhanced);
 
-    // ============ BASİT PARLAK OBJE TESPİTİ ============
+    // ============ DAHA BÜYÜK WINDOW + MİNİMUM MORFOLOJİ ============
 
-    // Global ortalamayı hesapla
-    cv::Mat mask = enhanced > 10;
-    cv::Scalar meanVal = cv::mean(enhanced, mask);
-    double globalMean = meanVal[0];
+    cv::Mat localMean;
+    cv::blur(enhanced, localMean, cv::Size(51, 51));  // 31 → 51 (DAHA BÜYÜK)
 
-    qDebug() << "Global mean intensity:" << globalMean;
+    cv::Mat enhancedFloat, meanFloat;
+    enhanced.convertTo(enhancedFloat, CV_32F);
+    localMean.convertTo(meanFloat, CV_32F);
 
-    // Ortalamanın üstündeki parlak bölgeleri bul
-    double threshold = globalMean + 50;  // Ortalama + 50
-    qDebug() << "Using threshold:" << threshold;
+    cv::Mat contrast = enhancedFloat - meanFloat;
+    cv::Mat contrastAbs = cv::abs(contrast);
+
+    double minVal, maxVal;
+    cv::minMaxLoc(contrastAbs, &minVal, &maxVal);
+    qDebug() << "Contrast stats - min:" << minVal << "max:" << maxVal;
 
     cv::Mat binary;
-    cv::threshold(enhanced, binary, threshold, 255, cv::THRESH_BINARY);
+    cv::threshold(contrastAbs, binary, 20, 255, cv::THRESH_BINARY);  // 12 → 20
+    binary.convertTo(binary, CV_8U);
 
+    cv::Mat mask = enhanced > 10;
     cv::bitwise_and(binary, mask, binary);
 
-    // Morfoloji
-    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5));
-    cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel, cv::Point(-1,-1), 2);
-    cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel, cv::Point(-1,-1), 1);
+    // MİNİMAL MORFOLOJİ - büyük blobs oluşmasın
+    cv::Mat kernel_tiny = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel_tiny, cv::Point(-1,-1), 1);  // Sadece OPEN
 
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    const int MIN_AREA = 150;
-    const int MAX_AREA = 4000;
-    const float MIN_ASPECT_RATIO = 0.3f;
-    const float MAX_ASPECT_RATIO = 3.5f;
-    const float MIN_Y_RATIO = 0.20f;
-    const float MAX_Y_RATIO = 0.75f;
-    const float MIN_X_RATIO = 0.20f;
-    const float MAX_X_RATIO = 0.80f;
+    qDebug() << "==========================================";
+    qDebug() << "Total contours found:" << contours.size();
+
+    const int MIN_AREA = 100;
+    const int MAX_AREA = 5000;
+    const float MIN_ASPECT_RATIO = 0.2f;
+    const float MAX_ASPECT_RATIO = 5.0f;
+    const float MIN_Y_RATIO = 0.15f;
+    const float MAX_Y_RATIO = 0.80f;
+    const float MIN_X_RATIO = 0.15f;
+    const float MAX_X_RATIO = 0.85f;
 
     std::vector<std::string> labels;
     int objectCount = 0;
-
-    qDebug() << "==========================================";
-    qDebug() << "Detection Started - Total contours:" << contours.size();
 
     for (const auto& contour : contours) {
         cv::Rect bbox = cv::boundingRect(contour);
 
         int area = bbox.width * bbox.height;
-        if (area < MIN_AREA || area > MAX_AREA) continue;
+        if (area < MIN_AREA || area > MAX_AREA) {
+            if (area > 100000) qDebug() << "  Rejected HUGE blob: area=" << area;
+            continue;
+        }
 
         float aspectRatio = (float)bbox.width / (float)bbox.height;
         if (aspectRatio < MIN_ASPECT_RATIO || aspectRatio > MAX_ASPECT_RATIO) continue;
@@ -2226,10 +2240,11 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
 
         double contourArea = cv::contourArea(contour);
         double solidity = contourArea / area;
-        if (solidity < 0.30) continue;
+        if (solidity < 0.20) continue;
 
-        cv::Mat roi = enhanced(bbox);
-        double meanIntensity = cv::mean(roi)[0];
+        cv::Mat roiContrast = contrastAbs(bbox);
+        double meanContrast = cv::mean(roiContrast)[0];
+        if (meanContrast < 15) continue;  // 10 → 15
 
         objectCount++;
 
@@ -2240,17 +2255,12 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
         qDebug() << "  Area:" << area << "pixels";
         qDebug() << "  Aspect ratio:" << QString::number(aspectRatio, 'f', 2);
         qDebug() << "  Solidity:" << QString::number(solidity, 'f', 3);
-        qDebug() << "  Mean intensity:" << QString::number(meanIntensity, 'f', 1);
+        qDebug() << "  Mean contrast:" << QString::number(meanContrast, 'f', 1);
 
         float centerX_norm = (bbox.x + bbox.width / 2.0f) / size;
         float centerY_norm = (bbox.y + bbox.height / 2.0f) / size;
         float width_norm = (float)bbox.width / size;
         float height_norm = (float)bbox.height / size;
-
-        qDebug() << "  YOLO format: 0" << QString::number(centerX_norm, 'f', 6)
-                 << QString::number(centerY_norm, 'f', 6)
-                 << QString::number(width_norm, 'f', 6)
-                 << QString::number(height_norm, 'f', 6);
 
         std::ostringstream ss;
         ss << std::fixed << std::setprecision(6);
