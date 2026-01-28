@@ -272,44 +272,27 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                              << "w=" << width << "h=" << height;
                 }
 
-                // False positive filtering
+                // Accept all valid boxes
                 if (width > 0 && height > 0) {
-                    // Calculate aspect ratio and relative size
+                    // Calculate aspect ratio and relative size for logging
                     float aspectRatio = static_cast<float>(width) / static_cast<float>(height);
                     float boxArea = static_cast<float>(width * height);
                     float imageArea = static_cast<float>(originalWidth * originalHeight);
                     float areaRatio = boxArea / imageArea;
-
-                    bool rejectBox = false;
-                    QString rejectReason;
-
-                    // Sonar-specific: Reject detections in artifact-prone areas
                     float yCenter = y + height / 2.0f;
                     float yRatioFromTop = yCenter / static_cast<float>(originalHeight);
 
-                    if (yRatioFromTop < 0.75f) {
-                        rejectBox = true;
-                        rejectReason = "far-field artifact";
-                    }
+                    boxes.push_back(cv::Rect(x, y, width, height));
+                    confidences.push_back(confidence);
+                    classIds.push_back(0);
+                    acceptedBoxes++;
 
-                    if (!rejectBox) {
-                        boxes.push_back(cv::Rect(x, y, width, height));
-                        confidences.push_back(confidence);
-                        classIds.push_back(0);
-                        acceptedBoxes++;
-
-                        if (highConfBoxes <= 50) {
-                            qDebug() << "  AR=" << QString::number(aspectRatio, 'f', 2)
-                            << "Area=" << QString::number(areaRatio * 100, 'f', 1) << "%"
-                            << "X=" << x << "Y=" << y  // X'i de ekledik
-                            << "(" << QString::number(yRatioFromTop * 100, 'f', 0) << "% from top)";
-                            qDebug() << "  Status: ✓ ACCEPTED";
-                        }
-                    } else {
-                        zeroSizeRejected++;
-                        if (highConfBoxes <= 10) {
-                            qDebug() << "  Status: ✗ REJECTED (" << rejectReason << ")";
-                        }
+                    if (highConfBoxes <= 50) {
+                        qDebug() << "  AR=" << QString::number(aspectRatio, 'f', 2)
+                        << "Area=" << QString::number(areaRatio * 100, 'f', 1) << "%"
+                        << "X=" << x << "Y=" << y
+                        << "(" << QString::number(yRatioFromTop * 100, 'f', 0) << "% from top)";
+                        qDebug() << "  Status: ✓ ACCEPTED";
                     }
                 } else {
                     zeroSizeRejected++;
