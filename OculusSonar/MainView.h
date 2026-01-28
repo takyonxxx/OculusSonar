@@ -189,6 +189,9 @@ public slots:
                         short* bearings, double range,
                         const QString& directoryPath);
     void SaveRenderedSonarImage_NoGrid();
+    void saveImageWithAutoLabel(int height, int width, uchar* image,
+                                          short* bearings, double range,
+                                const QString& directoryPath);
     void SaveRenderedSonarImage();
     QColor applySonarColorMap(float intensity);
     void NewUserConfig(UserConfig config);

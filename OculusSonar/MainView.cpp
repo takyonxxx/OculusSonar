@@ -776,12 +776,16 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        // static qint64 lastSaveTime = 0;
-        // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-        // if (currentTime - lastSaveTime >= 1000) {
-        //     SaveRenderedSonarImage_NoGrid();
-        //     lastSaveTime = currentTime;
-        // }
+
+
+        static qint64 lastSaveTime = 0;
+        qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+        if (currentTime - lastSaveTime >= 1000) {
+            //SaveRenderedSonarImage_NoGrid();
+            saveImageWithAutoLabel(height, width, pEntry->m_pImage,
+                           pEntry->m_pBrgs, range, sonarImageDir);
+            lastSaveTime = currentTime;
+        }
 
         // static qint64 lastSaveTime = 0;
         // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
@@ -930,6 +934,142 @@ void MainView::saveImageAsPng(int height, int width, uchar* image,
         QString("sonar_cartesian_%1.png").arg(counter, 5, 10, QChar('0'))
         );
     cv::imwrite(filename.toStdString(), enhanced);
+}
+
+void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
+                                      short* bearings, double range,
+                                      const QString& directoryPath)
+{
+    // İlk çağrıda classes.txt oluştur
+    static bool classesFileCreated = false;
+    if (!classesFileCreated) {
+        QString classesPath = QDir(directoryPath).absoluteFilePath("classes.txt");
+        std::ofstream classesFile(classesPath.toStdString());
+        classesFile << "Object" << std::endl;
+        classesFile.close();
+        classesFileCreated = true;
+        qDebug() << "Created:" << classesPath;
+    }
+
+    int size = 640;
+    cv::Mat cartesian = cv::Mat::zeros(size, size, CV_8UC1);
+    int centerX = size / 2;
+    int centerY = size;
+
+    // Polar → Cartesian
+    for (int b = 0; b < width; b++) {
+        float bearingRad = bearings[b] * 0.01f * M_PI / 180.0f;
+        for (int r = 0; r < height; r++) {
+            float distance = (r / (float)height) * range;
+            int x = centerX + (int)(distance * sin(bearingRad) * (size / (2.0 * range)));
+            int y = centerY - (int)(distance * cos(bearingRad) * (size / range));
+            if (x >= 0 && x < size && y >= 0 && y < size) {
+                uchar pixel = image[r * width + b];
+                cartesian.at<uchar>(y, x) = std::max(cartesian.at<uchar>(y, x), pixel);
+            }
+        }
+    }
+
+    // Denoising
+    cv::Mat denoised;
+    cv::fastNlMeansDenoising(cartesian, denoised, 5, 7, 21);
+
+    // CLAHE
+    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
+    cv::Mat enhanced;
+    clahe->apply(denoised, enhanced);
+
+    // ============ AUTO-LABELING - KOYU GÖLGELER ============
+
+    // Parametreler
+    const int MIN_AREA = 500;
+    const int MAX_AREA = 50000;
+    const float MIN_ASPECT_RATIO = 0.15f;
+    const float MAX_ASPECT_RATIO = 6.0f;
+    const float MIN_Y_RATIO = 0.05f;
+    const float MAX_Y_RATIO = 0.90f;
+    const float MIN_X_RATIO = 0.15f;
+    const float MAX_X_RATIO = 0.85f;
+
+    // Geniş Gaussian blur ile local mean (çevre ortalaması)
+    cv::Mat localMean;
+    cv::GaussianBlur(enhanced, localMean, cv::Size(101, 101), 0);
+
+    // Koyu bölgeler = local mean - enhanced > threshold
+    // Sonar görüntülerinde objeler GÖLGE bırakır (koyu alan)
+    cv::Mat diff;
+    cv::subtract(localMean, enhanced, diff, cv::noArray(), CV_16S);
+
+    cv::Mat binary;
+    cv::threshold(diff, binary, 15, 255, cv::THRESH_BINARY);
+    binary.convertTo(binary, CV_8U);
+
+    // Sonar fan dışını maskele (çok karanlık pikselleri atla)
+    cv::Mat mask = enhanced > 5;
+    cv::bitwise_and(binary, mask, binary);
+
+    // Hafif morfoloji - gürültüyü temizle ama objeleri koru
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
+    cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
+    cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel);
+
+    // Konturlar
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    // Etiketler
+    std::vector<std::string> labels;
+
+    for (const auto& contour : contours) {
+        cv::Rect bbox = cv::boundingRect(contour);
+
+        // Alan kontrolü
+        int area = bbox.width * bbox.height;
+        if (area < MIN_AREA || area > MAX_AREA) continue;
+
+        // Aspect ratio kontrolü
+        float aspectRatio = (float)bbox.width / (float)bbox.height;
+        if (aspectRatio < MIN_ASPECT_RATIO || aspectRatio > MAX_ASPECT_RATIO) continue;
+
+        // Y pozisyonu kontrolü
+        float yCenterRatio = (bbox.y + bbox.height / 2.0f) / size;
+        if (yCenterRatio < MIN_Y_RATIO || yCenterRatio > MAX_Y_RATIO) continue;
+
+        // X pozisyonu kontrolü - kenarlardaki artifact'ları atla
+        float xCenterRatio = (bbox.x + bbox.width / 2.0f) / size;
+        if (xCenterRatio < MIN_X_RATIO || xCenterRatio > MAX_X_RATIO) continue;
+
+        // YOLO formatına çevir
+        float centerX_norm = (bbox.x + bbox.width / 2.0f) / size;
+        float centerY_norm = (bbox.y + bbox.height / 2.0f) / size;
+        float width_norm = (float)bbox.width / size;
+        float height_norm = (float)bbox.height / size;
+
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(6);
+        ss << "0 " << centerX_norm << " " << centerY_norm << " "
+           << width_norm << " " << height_norm;
+
+        labels.push_back(ss.str());
+    }
+
+    // Sadece etiket varsa kaydet
+    if (labels.empty()) {
+        return;
+    }
+
+    counter++;
+    QString baseName = QString("sonar_%1").arg(counter, 5, 10, QChar('0'));
+
+    QString imagePath = QDir(directoryPath).absoluteFilePath(baseName + ".png");
+    cv::imwrite(imagePath.toStdString(), enhanced);
+
+    QString labelPath = QDir(directoryPath).absoluteFilePath(baseName + ".txt");
+    std::ofstream labelFile(labelPath.toStdString());
+    for (const auto& label : labels) {
+        labelFile << label << "\n";
+    }
+    labelFile.close();
 }
 
 void MainView::SaveRenderedSonarImage_NoGrid()

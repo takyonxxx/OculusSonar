@@ -216,5 +216,7 @@ unix {
 
 # # 5. Kontrol
 # docker-compose ps
+#pip uninstall torch torchvision
 #pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 #pip install ultralytics
+#C:\Users\MSI\AppData\Local\Programs\Python\Python311\python.exe train_sonar_yolo.py
