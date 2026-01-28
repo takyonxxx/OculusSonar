@@ -46,8 +46,10 @@ private:
     
     DL_INIT_PARAM params;
     
+    // Helper functions
     void preprocessImage(cv::Mat& img, float*& blob);
-    void postprocessOutput(float* output, std::vector<DL_RESULT>& results, int originalWidth, int originalHeight);
+    void postprocessOutput(float* output, std::vector<DL_RESULT>& results, 
+                          int originalWidth, int originalHeight);
 };
 
 #endif // INFERENCE_H

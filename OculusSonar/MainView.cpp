@@ -187,11 +187,15 @@ MainView::MainView(QWidget *parent) :
     QString modelPath = QCoreApplication::applicationDirPath() + "/sonar_model.onnx";
 
     if (QFile::exists(modelPath)) {
-        m_yoloParams.rectConfidenceThreshold = 0.3f;
-        m_yoloParams.iouThreshold = 0.5f;
+        // Roboflow validation: max threshold 38% for all objects
+        m_yoloParams.rectConfidenceThreshold = 0.20;  // Match Roboflow validation
+        m_yoloParams.iouThreshold = 0.45f;              // Slightly lower for overlapping
         m_yoloParams.modelPath = modelPath.toStdString();
-        m_yoloParams.imgSize = { 512, 512 };
+        m_yoloParams.imgSize = { 640, 640 };
         m_yoloParams.modelType = YOLO_DETECT_V8;
+
+        qDebug() << "YOLO Config: confidence=" << m_yoloParams.rectConfidenceThreshold
+                 << "iou=" << m_yoloParams.iouThreshold;
 
         bool success = m_yoloDetector->CreateSession(m_yoloParams);
 
@@ -771,65 +775,103 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        static qint64 lastSaveTime = 0;
-        qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-        if (currentTime - lastSaveTime >= 500) {
-            SaveRenderedSonarImage_NoGrid();
-            lastSaveTime = currentTime;
-        }
+        // static qint64 lastSaveTime = 0;
+        // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+        // if (currentTime - lastSaveTime >= 1000) {
+        //     SaveRenderedSonarImage_NoGrid();
+        //     lastSaveTime = currentTime;
+        // }
 
-        // YOLO OBJECT DETECTION
+        // static qint64 lastSaveTime = 0;
+        // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+        // if (currentTime - lastSaveTime >= 1000) {  // Her 1 saniyede bir
+        //     saveImageAsPng(height, width, pEntry->m_pImage,
+        //                    pEntry->m_pBrgs, range, sonarImageDir);
+        //     lastSaveTime = currentTime;
+        // }
+
+        // YOLO OBJECT DETECTION - FIXED VERSION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
             try {
+                // Create OpenCV Mat from sonar image data
                 cv::Mat sonarImage(height, width, CV_8UC1, pEntry->m_pImage);
 
+                // Run YOLO detection directly (preprocessing is done inside RunSession)
+                // No need to resize here - inference.cpp handles it
                 std::vector<DL_RESULT> results;
                 m_yoloDetector->RunSession(sonarImage, results);
 
                 if (!results.empty()) {
                     // Sort by confidence (descending)
                     std::sort(results.begin(), results.end(),
-                        [](const DL_RESULT& a, const DL_RESULT& b) {
-                            return a.confidence > b.confidence;
-                        });
+                              [](const DL_RESULT& a, const DL_RESULT& b) {
+                                  return a.confidence > b.confidence;
+                              });
 
+                    // Limit to top 10 detections
                     int maxDetections = 10;
                     int numToShow = std::min((int)results.size(), maxDetections);
 
                     QList<SonarSurface::DetectedObject> detections;
 
+                    qDebug() << "=== Processing" << numToShow << "detections for display ===";
+
                     for (int i = 0; i < numToShow; i++) {
                         const auto& det = results[i];
 
+                        // Calculate center of detected object in pixel coordinates
                         float centerPixelX = det.box.x + det.box.width / 2.0f;
                         float centerPixelY = det.box.y + det.box.height / 2.0f;
 
-                        if (centerPixelX < 0 || centerPixelX >= width) continue;
-                        if (centerPixelY < 0 || centerPixelY >= height) continue;
+                        // Validate coordinates
+                        if (centerPixelX < 0 || centerPixelX >= width) {
+                            qDebug() << "Skipping detection" << i << "- X out of bounds:" << centerPixelX;
+                            continue;
+                        }
+                        if (centerPixelY < 0 || centerPixelY >= height) {
+                            qDebug() << "Skipping detection" << i << "- Y out of bounds:" << centerPixelY;
+                            continue;
+                        }
 
+                        // Get bearing index from pixel X coordinate
                         int bearingIndex = (int)(centerPixelX);
-                        if (bearingIndex < 0) bearingIndex = 0;
-                        if (bearingIndex >= width) bearingIndex = width - 1;
+                        bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
 
+                        // Convert bearing index to radians
                         float bearingRad = 0.0f;
                         if (pEntry->m_pBrgs) {
                             bearingRad = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
                         }
 
+                        // Calculate distance from Y coordinate (Y=0 is near, Y=height is far)
                         float distance = (centerPixelY / (float)height) * range;
 
+                        // Convert polar to Cartesian coordinates (sonar coordinate system)
                         float x = distance * sin(bearingRad);
                         float y = distance * cos(bearingRad);
 
+                        // Calculate object size in meters
+                        // Approximate: width scales with range, height is more constant
+                        float objectWidthMeters = (det.box.width / (float)width) * range * 0.2f;
+                        float objectHeightMeters = (det.box.height / (float)height) * range * 0.15f;
+
+                        // Create detection object
                         SonarSurface::DetectedObject obj;
                         obj.meterPos = QPointF(x, y);
-                        obj.meterWidth = (det.box.width / (float)width) * range * 0.15f;
-                        obj.meterHeight = (det.box.height / (float)height) * range * 0.15f;
+                        obj.meterWidth = objectWidthMeters;
+                        obj.meterHeight = objectHeightMeters;
                         obj.confidence = det.confidence;
 
                         detections.append(obj);
+
+                        qDebug() << "Detection" << i << ":";
+                        qDebug() << "  Pixel: (" << det.box.x << "," << det.box.y
+                                 << ") Size:" << det.box.width << "x" << det.box.height;
+                        qDebug() << "  Meter: (" << x << "," << y << ") Distance:" << distance;
+                        qDebug() << "  Confidence:" << det.confidence;
                     }
 
+                    // Update display
                     m_pSonarSurface->SetDetections(detections);
                 }
 
@@ -858,88 +900,70 @@ void MainView::saveImageAsPng(int height, int width, uchar* image,
                               short* bearings, double range,
                               const QString& directoryPath)
 {
-    int size = 512;
+    int size = 640;
     cv::Mat cartesian = cv::Mat::zeros(size, size, CV_8UC1);
-    cv::Mat weightMap = cv::Mat::zeros(size, size, CV_32FC1);
 
     int centerX = size / 2;
     int centerY = size;
 
-    // IMPROVED: Accumulate pixel values with weights
+    // Polar → Cartesian
     for (int b = 0; b < width; b++) {
         float bearingRad = bearings[b] * 0.01f * M_PI / 180.0f;
 
         for (int r = 0; r < height; r++) {
             float distance = (r / (float)height) * range;
-
             int x = centerX + (int)(distance * sin(bearingRad) * (size / (2.0 * range)));
             int y = centerY - (int)(distance * cos(bearingRad) * (size / range));
 
             if (x >= 0 && x < size && y >= 0 && y < size) {
                 uchar pixel = image[r * width + b];
-
-                // Accumulate
                 cartesian.at<uchar>(y, x) = std::max(cartesian.at<uchar>(y, x), pixel);
-                weightMap.at<float>(y, x) += 1.0f;
             }
         }
     }
 
-    // IMPROVED: Fill holes with inpainting
-    cv::Mat mask = cv::Mat::zeros(size, size, CV_8UC1);
-    for (int y = 0; y < size; y++) {
-        for (int x = 0; x < size; x++) {
-            if (cartesian.at<uchar>(y, x) == 0 && y < centerY) {
-                mask.at<uchar>(y, x) = 255;
-            }
-        }
-    }
-
-    cv::Mat inpainted;
-    cv::inpaint(cartesian, mask, inpainted, 3, cv::INPAINT_TELEA);
-
-    // IMPROVED: Denoise
+    // Denoising (inpainting kaldırıldı)
     cv::Mat denoised;
-    cv::fastNlMeansDenoising(inpainted, denoised, 10, 7, 21);
+    cv::fastNlMeansDenoising(cartesian, denoised, 5, 7, 21);
 
-    // IMPROVED: Enhance contrast
-    cv::Mat enhanced;
-    cv::equalizeHist(denoised, enhanced);
-
-    // OPTIONAL: Apply CLAHE for better local contrast
+    // CLAHE
     cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    clahe->apply(enhanced, enhanced);
+    cv::Mat enhanced;
+    clahe->apply(denoised, enhanced);
 
+    // Kaydet
     counter++;
-    QString filename = QDir(directoryPath).absoluteFilePath("sonar_enhanced_" + QString::number(counter) + ".png");
+    QString filename = QDir(directoryPath).absoluteFilePath(
+        QString("sonar_cartesian_%1.png").arg(counter, 5, 10, QChar('0'))
+        );
     cv::imwrite(filename.toStdString(), enhanced);
 }
 
 void MainView::SaveRenderedSonarImage_NoGrid()
 {
     if (!m_pSonarSurface) return;
-    
+
     bool gridWasEnabled = m_pSonarSurface->m_showGrid;
     bool dwGridWasEnabled = m_pSonarSurface->m_dwGrid;
     bool gridTextWasEnabled = m_pSonarSurface->m_dwGridText;
-    
+
     m_pSonarSurface->m_showGrid = false;
     m_pSonarSurface->m_dwGrid = false;
     m_pSonarSurface->m_dwGridText = false;
     m_fanDisplay.update();
     QCoreApplication::processEvents();
-    
+
     QImage img = m_fanDisplay.grabFramebuffer();
-    
+
     m_pSonarSurface->m_showGrid = gridWasEnabled;
     m_pSonarSurface->m_dwGrid = dwGridWasEnabled;
     m_pSonarSurface->m_dwGridText = gridTextWasEnabled;
-    
+
     if (!img.isNull()) {
         m_renderCounter++;
         QString filename = QDir(sonarImageDir).absoluteFilePath(
             QString("sonar_clean_%1.png").arg(m_renderCounter, 5, 10, QChar('0'))
-        );
+            );
         img.save(filename, "PNG");
     }
 }
@@ -947,12 +971,12 @@ void MainView::SaveRenderedSonarImage_NoGrid()
 void MainView::SaveRenderedSonarImage()
 {
     QImage img = m_fanDisplay.grabFramebuffer();
-    
+
     if (!img.isNull()) {
         m_renderCounter++;
         QString filename = QDir(sonarImageDir).absoluteFilePath(
             QString("sonar_grid_%1.png").arg(m_renderCounter, 5, 10, QChar('0'))
-        );
+            );
         img.save(filename, "PNG");
     }
 }
@@ -2087,7 +2111,7 @@ void MainView::CreateYoloCheckbox()
         "   border: 2px solid #00CC00;"
         "   border-radius: 3px;"
         "}"
-    );
+        );
 
     connect(m_yoloCheckbox, &QCheckBox::toggled,
             this, &MainView::OnYoloCheckboxToggled);
@@ -2107,4 +2131,3 @@ void MainView::OnYoloCheckboxToggled(bool checked)
 
     qDebug() << "YOLO detection:" << (checked ? "ENABLED" : "DISABLED");
 }
-

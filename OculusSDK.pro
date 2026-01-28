@@ -201,3 +201,18 @@ unix {
     message("   Using pkg-config opencv4")
 }
 
+# # 1. Eski container'ları durdur
+# docker-compose down
+
+# # 2. Temizle
+# docker system prune -f
+
+# # 3. CVAT'i klon et (yoksa)
+# git clone https://github.com/opencv/cvat
+# cd cvat
+
+# # 4. Doğru komutla başlat
+# docker-compose up -d
+
+# # 5. Kontrol
+# docker-compose ps
