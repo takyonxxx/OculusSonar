@@ -283,30 +283,13 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                     bool rejectBox = false;
                     QString rejectReason;
 
-                    // Sonar-specific: Reject detections in near-field/water column area
-                    // False positives consistently appear at y=800-900 (40-45% from top)
-                    // Real objects appear at y>1400 (>70% from top)
+                    // Sonar-specific: Reject detections in artifact-prone areas
                     float yCenter = y + height / 2.0f;
                     float yRatioFromTop = yCenter / static_cast<float>(originalHeight);
 
-                    if (yRatioFromTop < 0.60f) {  // Upper 60% of image = near-field artifacts
+                    if (yRatioFromTop < 0.75f) {
                         rejectBox = true;
-                        rejectReason = QString("near-field artifact (y=%1, %2% from top)")
-                                           .arg(static_cast<int>(yCenter))
-                                           .arg(static_cast<int>(yRatioFromTop * 100));
-                    }
-                    // Reject extremely elongated boxes (likely false positives)
-                    else if (aspectRatio > 6.0f) {
-                        rejectBox = true;
-                        rejectReason = QString("too wide (AR=%1)").arg(aspectRatio, 0, 'f', 2);
-                    } else if (aspectRatio < 0.15f) {
-                        rejectBox = true;
-                        rejectReason = QString("too tall (AR=%1)").arg(aspectRatio, 0, 'f', 2);
-                    }
-                    // Reject boxes that are too large (>85% of image)
-                    else if (areaRatio > 0.85f) {
-                        rejectBox = true;
-                        rejectReason = QString("too large (%1% of image)").arg(areaRatio * 100, 0, 'f', 1);
+                        rejectReason = "far-field artifact";
                     }
 
                     if (!rejectBox) {
@@ -315,10 +298,11 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                         classIds.push_back(0);
                         acceptedBoxes++;
 
-                        if (highConfBoxes <= 10) {
+                        if (highConfBoxes <= 50) {
                             qDebug() << "  AR=" << QString::number(aspectRatio, 'f', 2)
                             << "Area=" << QString::number(areaRatio * 100, 'f', 1) << "%"
-                            << "Y=" << y << "(" << QString::number(yRatioFromTop * 100, 'f', 0) << "% from top)";
+                            << "X=" << x << "Y=" << y  // X'i de ekledik
+                            << "(" << QString::number(yRatioFromTop * 100, 'f', 0) << "% from top)";
                             qDebug() << "  Status: ✓ ACCEPTED";
                         }
                     } else {

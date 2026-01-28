@@ -188,7 +188,7 @@ MainView::MainView(QWidget *parent) :
 
     if (QFile::exists(modelPath)) {
         // Roboflow validation: max threshold 38% for all objects
-        m_yoloParams.rectConfidenceThreshold = 0.20;  // Match Roboflow validation
+        m_yoloParams.rectConfidenceThreshold = 0.25;  // Match Roboflow validation
         m_yoloParams.iouThreshold = 0.45f;              // Slightly lower for overlapping
         m_yoloParams.modelPath = modelPath.toStdString();
         m_yoloParams.imgSize = { 640, 640 };
