@@ -776,14 +776,14 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        static qint64 lastSaveTime = 0;
-        qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-        if (currentTime - lastSaveTime >= 1000) {
-            //SaveRenderedSonarImage_NoGrid();
-            saveImageWithAutoLabel(height, width, pEntry->m_pImage,
-                           pEntry->m_pBrgs, range, sonarImageDir);
-            lastSaveTime = currentTime;
-        }
+        // static qint64 lastSaveTime = 0;
+        // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+        // if (currentTime - lastSaveTime >= 1000) {
+        //     //SaveRenderedSonarImage_NoGrid();
+        //     saveImageWithAutoLabel(height, width, pEntry->m_pImage,
+        //                            pEntry->m_pBrgs, range, sonarImageDir);
+        //     lastSaveTime = currentTime;
+        // }
 
         // static qint64 lastSaveTime = 0;
         // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
@@ -1781,7 +1781,7 @@ void MainView::CreateHexViewer()
     QLabel* temperatureLabel = new QLabel("Temperature:", gridWidget);
     temperatureLabel->setStyleSheet(labelStyle);
     m_temperatureValue = new QLabel("--- °C", gridWidget);
-    m_temperatureValue->setStyleSheet(valueStyle);
+                         m_temperatureValue->setStyleSheet(valueStyle);
     gridLayout->addWidget(temperatureLabel, 5, 0);
     gridLayout->addWidget(m_temperatureValue, 5, 1);
 
@@ -1953,7 +1953,7 @@ QString MainView::FormatHexData(OsBufferEntry* pEntry)
         if (m_beamsValue) m_beamsValue->setText("---");
         if (m_frequencyValue) m_frequencyValue->setText("--- Hz");
         if (m_temperatureValue) m_temperatureValue->setText("--- °C");
-        if (m_pressureValue) m_pressureValue->setText("--- bar");
+                if (m_pressureValue) m_pressureValue->setText("--- bar");
         if (m_sosValue) m_sosValue->setText("--- m/s");
 
         return QString("No data available");
@@ -2189,7 +2189,6 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
 
     double minVal, maxVal;
     cv::minMaxLoc(contrastAbs, &minVal, &maxVal);
-    qDebug() << "Contrast stats - min:" << minVal << "max:" << maxVal;
 
     cv::Mat binary;
     cv::threshold(contrastAbs, binary, 20, 255, cv::THRESH_BINARY);  // 12 → 20
@@ -2204,9 +2203,6 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
 
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    qDebug() << "==========================================";
-    qDebug() << "Total contours found:" << contours.size();
 
     const int MIN_AREA = 100;
     const int MAX_AREA = 5000;
@@ -2251,11 +2247,6 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
         qDebug() << ">>> OBJECT" << objectCount << "DETECTED <<<";
         qDebug() << "  Pixel coords: x=" << bbox.x << "y=" << bbox.y
                  << "w=" << bbox.width << "h=" << bbox.height;
-        qDebug() << "  Center: (" << (bbox.x + bbox.width/2) << "," << (bbox.y + bbox.height/2) << ")";
-        qDebug() << "  Area:" << area << "pixels";
-        qDebug() << "  Aspect ratio:" << QString::number(aspectRatio, 'f', 2);
-        qDebug() << "  Solidity:" << QString::number(solidity, 'f', 3);
-        qDebug() << "  Mean contrast:" << QString::number(meanContrast, 'f', 1);
 
         float centerX_norm = (bbox.x + bbox.width / 2.0f) / size;
         float centerY_norm = (bbox.y + bbox.height / 2.0f) / size;
@@ -2280,8 +2271,6 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
     QString baseName = QString("sonar_%1").arg(counter, 5, 10, QChar('0'));
 
     qDebug() << "TOTAL OBJECTS:" << objectCount;
-    qDebug() << "Saving to:" << baseName;
-    qDebug() << "==========================================";
 
     QString imagePath = QDir(directoryPath).absoluteFilePath(baseName + ".png");
     cv::imwrite(imagePath.toStdString(), enhanced);
@@ -2293,3 +2282,4 @@ void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
     }
     labelFile.close();
 }
+
