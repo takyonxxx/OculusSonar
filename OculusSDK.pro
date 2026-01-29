@@ -216,7 +216,12 @@ unix {
 
 # # 5. Kontrol
 # docker-compose ps
-#pip uninstall torch torchvision
-#pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-#pip install ultralytics
+
+
+#winget install Python.Python.3.11 --scope user
+#pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
+#pip install onnx onnxruntime-gpu ultralytics opencv-python
+#python -c "import onnx; print('ONNX:', onnx.__version__)"
+
 #C:\Users\MSI\AppData\Local\Programs\Python\Python311\python.exe train_sonar_yolo.py

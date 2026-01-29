@@ -189,7 +189,7 @@ MainView::MainView(QWidget *parent) :
     if (QFile::exists(modelPath)) {
         // Roboflow validation: max threshold 38% for all objects
         m_yoloParams.rectConfidenceThreshold = 0.25;
-        m_yoloParams.iouThreshold = 0.45f;
+        m_yoloParams.iouThreshold = 0.3f;
         m_yoloParams.modelPath = modelPath.toStdString();
         m_yoloParams.imgSize = { 640, 640 };
         m_yoloParams.modelType = YOLO_DETECT_V8;

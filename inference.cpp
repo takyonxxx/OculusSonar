@@ -1,6 +1,7 @@
 #include "inference.h"
 #include <algorithm>
 #include <numeric>
+#include <cmath>
 
 YOLO_V8::YOLO_V8() {}
 
@@ -36,7 +37,6 @@ bool YOLO_V8::CreateSession(DL_INIT_PARAM& params) {
             outputNodeNames.push_back(outputNodeNamesPtr.back().get());
         }
 
-        // Multi-class support: numFeatures = 4 (bbox) + numClasses
         auto outputInfo = session->GetOutputTypeInfo(0);
         auto tensorInfo = outputInfo.GetTensorTypeAndShapeInfo();
         auto shape = tensorInfo.GetShape();
@@ -122,6 +122,55 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
             blob = nullptr;
         }
     }
+}
+
+bool YOLO_V8::passesGeometryFilter(const cv::Rect& box, int imgWidth, int imgHeight) {
+    // 1. Aspect Ratio filtresi
+    if (box.height <= 0) return false;
+
+    float aspectRatio = (float)box.width / (float)box.height;
+    if (aspectRatio < params.minAspectRatio || aspectRatio > params.maxAspectRatio) {
+        return false;
+    }
+
+    // 2. Alan filtresi
+    int area = box.width * box.height;
+    if (area < params.minBoxArea || area > params.maxBoxArea) {
+        return false;
+    }
+
+    // 3. Squareness (kutumsuluk) filtresi
+    float squareness = (float)std::min(box.width, box.height) /
+                       (float)std::max(box.width, box.height);
+    if (squareness < params.minSquareness) {
+        return false;
+    }
+
+    // 4. Sonar range filtresi
+    if (params.enableSonarFilter) {
+        float centerX = box.x + box.width / 2.0f;
+        float centerY = box.y + box.height / 2.0f;
+
+        // Sonar origin (genelde görüntünün alt ortası)
+        float originX = imgWidth / 2.0f;
+        float originY = imgHeight * params.sonarOriginY;
+
+        float dist = std::sqrt(std::pow(centerX - originX, 2) +
+                               std::pow(centerY - originY, 2));
+        float maxDist = std::sqrt(std::pow((float)imgWidth / 2.0f, 2) +
+                                  std::pow((float)imgHeight, 2));
+
+        if (maxDist > 0) {
+            float normalizedRange = dist / maxDist;
+
+            if (normalizedRange < params.sonarMinRange ||
+                normalizedRange > params.sonarMaxRange) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
@@ -212,12 +261,18 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
 
             for (size_t i = 0; i < indices.size(); i++) {
                 int idx = indices[i];
+
+                // Geometry filtresi uygula
+                if (!passesGeometryFilter(boxes[idx], originalWidth, originalHeight)) {
+                    continue;
+                }
+
                 DL_RESULT result;
                 result.classId = classIds[idx];
                 result.confidence = confidences[idx];
                 result.box = boxes[idx];
                 result.className = (result.classId < static_cast<int>(classes.size()))
-                                   ? classes[result.classId] : "Unknown";
+                                       ? classes[result.classId] : "Unknown";
                 results.push_back(result);
             }
         }
