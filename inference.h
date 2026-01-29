@@ -6,30 +6,32 @@
 #include <vector>
 #include <string>
 
-enum MODEL_TYPE {
-    YOLO_DETECT_V8 = 1
-};
-
 struct DL_INIT_PARAM {
     std::string modelPath;
-    int modelType = YOLO_DETECT_V8;
+    int modelType;
     std::vector<int> imgSize = {640, 640};
-    float rectConfidenceThreshold = 0.25f;  // Düşük tut - model küçük objeler için
+
+    float rectConfidenceThreshold = 0.15f;
     float iouThreshold = 0.45f;
-    std::vector<std::string> classNames = {"Object"};
+    std::vector<std::string> classNames;
 
-    // Box Geometry Filters - VERİDEN HESAPLANDI
-    float minAspectRatio = 0.20f;     // Data min: 0.27, margin ile
-    float maxAspectRatio = 2.50f;     // Data max: 1.76, margin ile
-    int minBoxArea = 150;              // Data min: 331, margin ile
-    int maxBoxArea = 10000;            // Data max: 4853, margin ile
-    float minSquareness = 0.15f;       // Data min: 0.27, margin ile
+    // Box Geometry Filters
+    float minAspectRatio = 0.15f;
+    float maxAspectRatio = 3.0f;
+    int minBoxArea = 200;
+    int maxBoxArea = 15000;
+    float minSquareness = 0.15f;
 
-    // Sonar Geometry Filters
-    bool enableSonarFilter = true;
-    float sonarMinRange = 0.20f;       // Data min: 0.33, margin ile
-    float sonarMaxRange = 1.00f;       // Data max: 0.87, margin ile (disable upper)
-    float sonarOriginY = 1.0f;         // Sonar kaynağı altta
+    // Sonar Range Filter (radial)
+    bool enableSonarFilter = false;
+    float sonarMinRange = 0.15f;
+    float sonarMaxRange = 0.95f;
+    float sonarOriginY = 1.0f;
+
+    // Y Position Filter (simple vertical filter)
+    bool enableYFilter = false;
+    float minYRatio = 0.0f;
+    float maxYRatio = 1.0f;
 };
 
 struct DL_RESULT {
@@ -37,6 +39,10 @@ struct DL_RESULT {
     float confidence;
     cv::Rect box;
     std::string className;
+};
+
+enum MODEL_TYPE {
+    YOLO_DETECT_V8 = 1
 };
 
 class YOLO_V8 {

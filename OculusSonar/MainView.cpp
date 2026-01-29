@@ -190,16 +190,7 @@ MainView::MainView(QWidget *parent) :
         m_yoloParams.modelPath = modelPath.toStdString();
         m_yoloParams.classNames = {"kutu"};
 
-        m_yoloParams.rectConfidenceThreshold = 0.15f;  // 0.10 -> 0.15
-        m_yoloParams.minAspectRatio = 0.15f;
-        m_yoloParams.maxAspectRatio = 3.0f;
-        m_yoloParams.minBoxArea = 200;
-        m_yoloParams.maxBoxArea = 15000;
-        m_yoloParams.minSquareness = 0.15f;
-        m_yoloParams.sonarMinRange = 0.15f;   // Merkez dead zone
-        m_yoloParams.sonarMaxRange = 0.95f;   // Kenar halkası
-        m_yoloParams.sonarOriginY = 1.0f;
-        m_yoloParams.enableSonarFilter = false;
+        m_yoloParams.rectConfidenceThreshold = 0.1f;
 
         qDebug() << "YOLO Config: confidence=" << m_yoloParams.rectConfidenceThreshold
                  << "iou=" << m_yoloParams.iouThreshold;

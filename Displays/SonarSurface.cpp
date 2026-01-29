@@ -866,20 +866,15 @@ void SonarSurface::RenderDetections()
 
     glDisable(GL_DEPTH_TEST);
 
-    RmglSetColour(Qt::red);
-    RmglSetPgm(pgmSolid);
-    glLineWidth(3.0f);
-
-    int aPosition = glGetAttribLocation(m_pgmId, "aPosition");
+    int aPosition = glGetAttribLocation(m_pgmSolid, "aPosition");
 
     for (const auto& obj : m_detections) {
-        float halfW = (obj.meterWidth * 3.0f) / 2.0f;
-        float halfH = (obj.meterHeight * 3.0f) / 2.0f;
+        float halfW = (obj.meterWidth * m_detectionWidthScale) / 2.0f;
+        float halfH = (obj.meterHeight * m_detectionHeightScale) / 2.0f;
 
         float x = static_cast<float>(obj.meterPos.x());
         float y = static_cast<float>(obj.meterPos.y());
 
-        // Bounding box
         float vertices[] = {
             x - halfW, y - halfH,
             x + halfW, y - halfH,
@@ -887,19 +882,33 @@ void SonarSurface::RenderDetections()
             x - halfW, y + halfH
         };
 
+        // 1. Dış glow - koyu mavi
+        RmglSetColour(QColor(0, 100, 180));
+        RmglSetPgm(pgmSolid);  // Rengi shader'a gönder
+        glLineWidth(5.0f);
         glVertexAttribPointer(aPosition, 2, GL_FLOAT, GL_FALSE, 0, vertices);
         glEnableVertexAttribArray(aPosition);
         glDrawArrays(GL_LINE_LOOP, 0, 4);
 
-        // Center cross
-        float crossSize = 0.3f;
+        // 2. Ana çerçeve - parlak cyan
+        RmglSetColour(QColor(0, 220, 255));
+        RmglSetPgm(pgmSolid);  // Rengi shader'a gönder
+        glLineWidth(2.0f);
+        glVertexAttribPointer(aPosition, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+        glDrawArrays(GL_LINE_LOOP, 0, 4);
+
+        // 3. Merkez artı
+        RmglSetColour(QColor(0, 255, 200));
+        RmglSetPgm(pgmSolid);  // Rengi shader'a gönder
+        glLineWidth(1.5f);
+
+        float crossSize = qMin(halfW, halfH) * 0.3f;
         float crossVerts[] = {
             x - crossSize, y,
             x + crossSize, y,
             x, y - crossSize,
             x, y + crossSize
         };
-
         glVertexAttribPointer(aPosition, 2, GL_FLOAT, GL_FALSE, 0, crossVerts);
         glDrawArrays(GL_LINES, 0, 4);
     }

@@ -125,7 +125,7 @@ void YOLO_V8::preprocessImage(cv::Mat& img, float*& blob) {
 }
 
 bool YOLO_V8::passesGeometryFilter(const cv::Rect& box, int imgWidth, int imgHeight) {
-    // 1. Aspect Ratio filtresi
+    // 1. Aspect Ratio
     if (box.height <= 0) return false;
 
     float aspectRatio = (float)box.width / (float)box.height;
@@ -133,25 +133,34 @@ bool YOLO_V8::passesGeometryFilter(const cv::Rect& box, int imgWidth, int imgHei
         return false;
     }
 
-    // 2. Alan filtresi
+    // 2. Alan
     int area = box.width * box.height;
     if (area < params.minBoxArea || area > params.maxBoxArea) {
         return false;
     }
 
-    // 3. Squareness (kutumsuluk) filtresi
+    // 3. Squareness
     float squareness = (float)std::min(box.width, box.height) /
                        (float)std::max(box.width, box.height);
     if (squareness < params.minSquareness) {
         return false;
     }
 
-    // 4. Sonar range filtresi
+    // 4. Y Position Filter
+    if (params.enableYFilter) {
+        float centerY = box.y + box.height / 2.0f;
+        float yRatio = centerY / (float)imgHeight;
+
+        if (yRatio < params.minYRatio || yRatio > params.maxYRatio) {
+            return false;
+        }
+    }
+
+    // 5. Sonar Range Filter
     if (params.enableSonarFilter) {
         float centerX = box.x + box.width / 2.0f;
         float centerY = box.y + box.height / 2.0f;
 
-        // Sonar origin (genelde görüntünün alt ortası)
         float originX = imgWidth / 2.0f;
         float originY = imgHeight * params.sonarOriginY;
 
@@ -206,7 +215,6 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
             float w_norm = output[2 * numPredictions + i];
             float h_norm = output[3 * numPredictions + i];
 
-            // Multi-class: En yüksek confidence'lı sınıfı bul
             int bestClassId = 0;
             float bestConfidence = 0.0f;
             for (int c = 0; c < numClasses; c++) {
@@ -237,7 +245,6 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
                 int width = static_cast<int>(w_original);
                 int height = static_cast<int>(h_original);
 
-                // Clamp to image boundaries
                 if (x < 0) { width += x; x = 0; }
                 if (y < 0) { height += y; y = 0; }
                 if (x >= originalWidth) { x = originalWidth - 1; width = 1; }
@@ -253,7 +260,6 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
             }
         }
 
-        // Apply Non-Maximum Suppression
         if (!boxes.empty()) {
             std::vector<int> indices;
             cv::dnn::NMSBoxes(boxes, confidences, params.rectConfidenceThreshold,
@@ -262,7 +268,6 @@ void YOLO_V8::postprocessOutput(float* output, std::vector<DL_RESULT>& results,
             for (size_t i = 0; i < indices.size(); i++) {
                 int idx = indices[i];
 
-                // Geometry filtresi uygula
                 if (!passesGeometryFilter(boxes[idx], originalWidth, originalHeight)) {
                     continue;
                 }
