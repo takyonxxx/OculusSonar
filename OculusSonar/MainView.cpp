@@ -187,13 +187,19 @@ MainView::MainView(QWidget *parent) :
     QString modelPath = QCoreApplication::applicationDirPath() + "/sonar_model.onnx";
 
     if (QFile::exists(modelPath)) {
-        // Roboflow validation: max threshold 38% for all objects
-        m_yoloParams.rectConfidenceThreshold = 0.25;
-        m_yoloParams.iouThreshold = 0.3f;
         m_yoloParams.modelPath = modelPath.toStdString();
-        m_yoloParams.imgSize = { 640, 640 };
-        m_yoloParams.modelType = YOLO_DETECT_V8;
         m_yoloParams.classNames = {"kutu"};
+
+        m_yoloParams.rectConfidenceThreshold = 0.15f;  // 0.10 -> 0.15
+        m_yoloParams.minAspectRatio = 0.15f;
+        m_yoloParams.maxAspectRatio = 3.0f;
+        m_yoloParams.minBoxArea = 200;
+        m_yoloParams.maxBoxArea = 15000;
+        m_yoloParams.minSquareness = 0.15f;
+        m_yoloParams.sonarMinRange = 0.15f;   // Merkez dead zone
+        m_yoloParams.sonarMaxRange = 0.95f;   // Kenar halkası
+        m_yoloParams.sonarOriginY = 1.0f;
+        m_yoloParams.enableSonarFilter = false;
 
         qDebug() << "YOLO Config: confidence=" << m_yoloParams.rectConfidenceThreshold
                  << "iou=" << m_yoloParams.iouThreshold;

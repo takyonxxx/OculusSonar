@@ -6,26 +6,30 @@
 #include <vector>
 #include <string>
 
+enum MODEL_TYPE {
+    YOLO_DETECT_V8 = 1
+};
+
 struct DL_INIT_PARAM {
     std::string modelPath;
-    int modelType;
+    int modelType = YOLO_DETECT_V8;
     std::vector<int> imgSize = {640, 640};
-    float rectConfidenceThreshold = 0.4f;  // Küçük objeler için biraz düşük tut
-    float iouThreshold = 0.4f;              // Küçük kutularda overlap hassas
-    std::vector<std::string> classNames;
+    float rectConfidenceThreshold = 0.25f;  // Düşük tut - model küçük objeler için
+    float iouThreshold = 0.45f;
+    std::vector<std::string> classNames = {"Object"};
 
-    // Box Geometry Filters - 40x40 hedef için
-    float minAspectRatio = 0.5f;    // 1:2 oranına kadar izin ver (20x40)
-    float maxAspectRatio = 2.0f;    // 2:1 oranına kadar izin ver (40x20)
-    int minBoxArea = 400;           // ~20x20 - hedefin yarısı
-    int maxBoxArea = 10000;          // ~100x100 - hedefin 2 katı
-    float minSquareness = 0.4f;     // Kutu benzeri şekiller için sıkı tut
+    // Box Geometry Filters - VERİDEN HESAPLANDI
+    float minAspectRatio = 0.20f;     // Data min: 0.27, margin ile
+    float maxAspectRatio = 2.50f;     // Data max: 1.76, margin ile
+    int minBoxArea = 150;              // Data min: 331, margin ile
+    int maxBoxArea = 10000;            // Data max: 4853, margin ile
+    float minSquareness = 0.15f;       // Data min: 0.27, margin ile
 
     // Sonar Geometry Filters
     bool enableSonarFilter = true;
-    float sonarMinRange = 0.06f;    // 640'ın %6'sı ≈ 38px merkez dead zone
-    float sonarMaxRange = 0.94f;    // Kenar halkalarını at
-    float sonarOriginY = 1.0f;
+    float sonarMinRange = 0.20f;       // Data min: 0.33, margin ile
+    float sonarMaxRange = 1.00f;       // Data max: 0.87, margin ile (disable upper)
+    float sonarOriginY = 1.0f;         // Sonar kaynağı altta
 };
 
 struct DL_RESULT {
@@ -33,10 +37,6 @@ struct DL_RESULT {
     float confidence;
     cv::Rect box;
     std::string className;
-};
-
-enum MODEL_TYPE {
-    YOLO_DETECT_V8 = 1
 };
 
 class YOLO_V8 {
