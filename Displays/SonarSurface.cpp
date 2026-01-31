@@ -235,7 +235,6 @@ void SonarSurface::RenderBackground()
 void SonarSurface::RenderBranding()
 {
     if (m_showBranding) {
-        qDebug() << "Rendering branding";
         RmglRenderLeftBranding();
         RmglRenderRightBranding();
     }
@@ -813,7 +812,6 @@ void SonarSurface::mouseMoveEvent(QMouseEvent* pEvent)
 // -----------------------------------------------------------------------------
 void SonarSurface::mousePressEvent(QMouseEvent* pEvent)
 {
-    qDebug() << "Measure enable" << m_measureEnable;
 
     // Capture the measure point
     if ((pEvent->button() == Qt::LeftButton) && (m_measureEnable))
@@ -865,7 +863,9 @@ void SonarSurface::SetDetections(const QList<DetectedObject>& detections)
 
 void SonarSurface::RenderDetections()
 {
-    if (m_detections.isEmpty()) return;
+    if (m_detections.isEmpty()) {
+        return;
+    }
 
     glDisable(GL_DEPTH_TEST);
 
@@ -886,7 +886,7 @@ void SonarSurface::RenderDetections()
         };
 
         // 1. Dış glow - koyu mavi
-        RmglSetColour(QColor(0, 100, 180));
+        RmglSetColour(QColor(200, 0, 0));
         RmglSetPgm(pgmSolid);  // Rengi shader'a gönder
         glLineWidth(5.0f);
         glVertexAttribPointer(aPosition, 2, GL_FLOAT, GL_FALSE, 0, vertices);
@@ -894,14 +894,14 @@ void SonarSurface::RenderDetections()
         glDrawArrays(GL_LINE_LOOP, 0, 4);
 
         // 2. Ana çerçeve - parlak cyan
-        RmglSetColour(QColor(0, 220, 255));
+        RmglSetColour(QColor(255, 0, 0));
         RmglSetPgm(pgmSolid);  // Rengi shader'a gönder
         glLineWidth(2.0f);
         glVertexAttribPointer(aPosition, 2, GL_FLOAT, GL_FALSE, 0, vertices);
         glDrawArrays(GL_LINE_LOOP, 0, 4);
 
         // 3. Merkez artı
-        RmglSetColour(QColor(0, 255, 200));
+        RmglSetColour(QColor(255, 200, 0));
         RmglSetPgm(pgmSolid);  // Rengi shader'a gönder
         glLineWidth(1.5f);
 

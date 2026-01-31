@@ -123,8 +123,8 @@ public:
     float    m_measureEndX;
     float    m_measureEndY;
 
-    float m_detectionWidthScale = 1.5f;
-    float m_detectionHeightScale = 4.5f;
+    float m_detectionWidthScale = 5.0f;
+    float m_detectionHeightScale = 5.0f;
 
     bool     m_wasInsideFan;
 

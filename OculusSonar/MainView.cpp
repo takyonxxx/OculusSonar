@@ -125,13 +125,13 @@ MainView::MainView(QWidget *parent) :
     m_detectionParamsWidget->setWindowFlags(Qt::Window);
     m_detectionParams = m_detectionParamsWidget->getParams();
     
-    m_showDetectionsCheckbox = new QCheckBox("Show Detections", this);
-    m_showDetectionsCheckbox->setChecked(false);
+    m_generateDatasetCheckbox = new QCheckBox("Generate Dataset", this);
+    m_generateDatasetCheckbox->setChecked(false);
     
     connect(m_detectionParamsWidget, &DetectionParamsWidget::paramsChanged, 
             this, &MainView::OnDetectionParamsChanged);
-    connect(m_showDetectionsCheckbox, &QCheckBox::toggled,
-            this, &MainView::OnShowDetectionsToggled);
+    connect(m_generateDatasetCheckbox, &QCheckBox::toggled,
+            this, &MainView::OnGenerateDatasetToggled);
 
 
     // Update the fan when the palette is selected
@@ -208,14 +208,11 @@ MainView::MainView(QWidget *parent) :
 
         m_yoloParams.rectConfidenceThreshold = 0.1f;
 
-        qDebug() << "YOLO Config: confidence=" << m_yoloParams.rectConfidenceThreshold
-                 << "iou=" << m_yoloParams.iouThreshold;
 
         bool success = m_yoloDetector->CreateSession(m_yoloParams);
 
         if (success) {
             m_yoloEnabled = true;
-            qDebug() << "YOLO detection enabled";
         } else {
             delete m_yoloDetector;
             m_yoloDetector = nullptr;
@@ -290,37 +287,29 @@ void MainView::keyPressEvent(QKeyEvent* event) {
 
     if (m_displayMode == online) {
         if (key == 'Q') {
-            //qDebug() << "Change frequency";
             m_onlineCtrls.ToogleFrequency();
         }
         else if (key == 'W') {
-            //qDebug() << "Increase range";
             m_onlineCtrls.IncreaseRange();
         }
         else if (key == 'S') {
-            qDebug() << "Decrease range";
             m_onlineCtrls.DecreaseRange();
         }
         else if (key == 'A') {
-            //qDebug() << "Reduce gain";
             m_onlineCtrls.DecreaseGain();
         }
         else if (key == 'D') {
-            //qDebug() << "Increase gain";
             m_onlineCtrls.IncreaseGain();
         }
         else if (key == 'R') {
-            //qDebug() << "Record";
             m_onlineCtrls.ToggleRecord();
         }
         else if (key == 'T') {
-            // qDebug() << "Device setup";
         }
     }
 
     if ((m_displayMode == online) || (m_displayMode == review)) {
         if (key == 'P') {
-            //qDebug() << "Snapshot";
             m_toolsCtrls.on_snapshot_clicked();
         }
         else if (key == 'H') {
@@ -339,7 +328,6 @@ void MainView::keyPressEvent(QKeyEvent* event) {
 
     if (m_displayMode == review) {
         if (key == ' ') {
-            //qDebug() << "Play/Pause";
         }
     }
 }
@@ -503,7 +491,6 @@ void MainView::StartReplay()
     int entry = m_reviewCtrls.GetEntry();
 
     if (entry == (m_nEntries - 2)) {
-        qDebug() << "End of file";
         entry = 0;
     }
 
@@ -537,7 +524,6 @@ void MainView::UpdateSonarInfo(OculusPartNumberType pn) {
     int index = 0;
     while (OculusSonarInfo[index].partNumber != partNumberEnd) {
         if (OculusSonarInfo[index].partNumber == pn) {
-            qDebug() << "Found sonar: " << pn;
             break;
         }
         index++;
@@ -547,7 +533,6 @@ void MainView::UpdateSonarInfo(OculusPartNumberType pn) {
     m_pSonarInfo = new OculusInfo();
     memset(m_pSonarInfo, 0, sizeof(OculusInfo));
 
-    qDebug() << "Part no: " << pn;
 
     m_pSonarInfo->partNumber = pn;
     m_pSonarInfo->hasLF = OculusSonarInfo[index].hasLF;
@@ -690,7 +675,6 @@ void MainView::NewStatusMsg(OculusStatusMsg osm, quint16 valid, quint16 invalid)
     // Show the connected ports
     QString indicators;
     indicators += (osm.status & (1 << 7) ? "Main " : "");
-    //qDebug() << indicators;
 
 
     // -------------------------------------------------------------------------
@@ -706,7 +690,6 @@ void MainView::NewStatusMsg(OculusStatusMsg osm, quint16 valid, quint16 invalid)
     // Add some logic to determine whether a connection has been lost. If the device
     // returns (with a suitable time period), automatically reconnect
     if ((wasTimeout) && (! m_timeout)) {
-        // qDebug() << "Connecting after TMO";
         m_timeout = false;
         m_oculusClient.Disconnect();
         Sleep(500);
@@ -789,7 +772,8 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        if (m_showDetectionsCheckbox && m_showDetectionsCheckbox->isChecked())
+        // Dataset oluşturma (Generate Dataset checkbox ile kontrol)
+        if (m_generateDatasetCheckbox && m_generateDatasetCheckbox->isChecked())
         {
             analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
         }
@@ -797,36 +781,34 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         // YOLO OBJECT DETECTION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
             try {
-                // ========== AYNI TRANSFORM - Dataset ile aynı! ==========
+
                 // 1. Ham sonar görüntüsünü oluştur
                 cv::Mat sonarImage(height, width, CV_8UC1, pEntry->m_pImage);
 
-                // 2. Transpose + Flip (Dataset ile aynı)
+                // 2. Transpose + Flip
                 cv::Mat transformedImg;
                 cv::transpose(sonarImage, transformedImg);
                 cv::flip(transformedImg, transformedImg, 1);
 
-                // 3. 640x640 resize (Dataset ile aynı)
+                // 3. 640x640 resize
                 cv::Mat resizedImg;
                 cv::resize(transformedImg, resizedImg, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
-                
+
                 cv::Mat rgbImg;
                 cv::cvtColor(resizedImg, rgbImg, cv::COLOR_GRAY2RGB);
-                
+
                 cv::Mat rotatedImg;
                 cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
-                
+
                 static int frameCount = 0;
                 if (frameCount < 5) {
-                    cv::imwrite("/tmp/yolo_input_" + std::to_string(frameCount) + ".png", rotatedImg);
+                    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+                    QString debugPath = QString("%1/yolo_input_%2.png").arg(tempDir).arg(frameCount);
+                    cv::imwrite(debugPath.toStdString(), rotatedImg);
                     frameCount++;
                 }
 
-                qDebug() << "yoloooo";
-
-                // ========== TRANSFORM SONU ==========
-
-                // 4. YOLO inference (şimdi doğru formatta!)
+                // 4. YOLO inference
                 std::vector<DL_RESULT> results;
                 m_yoloDetector->RunSession(rotatedImg, results);
 
@@ -844,47 +826,33 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                     for (int i = 0; i < numToShow; i++) {
                         const auto& det = results[i];
 
-                        // ========== KOORDİNAT DÖNÜŞÜMLERİ ==========
-                        // YOLO 640x640 transform edilmiş görüntüde tespit etti
-                        // Şimdi gerçek sonar koordinatlarına dönüştürmeliyiz
+                        // YOLO rotated image'de detection yaptı (640x640)
+                        // X ekseni = bearing (soldan sağa)
+                        // Y ekseni = range (yukarıdan aşağı, 0=yakın, 640=uzak)
 
-                        // YOLO sonuçları 640x640 üzerinde
                         float yolo_centerX = det.box.x + det.box.width / 2.0f;
                         float yolo_centerY = det.box.y + det.box.height / 2.0f;
 
-                        // 640x640'tan orijinal transform edilmiş koordinatlara
-                        // (transform edilmiş görüntü zaten 640x640, değişiklik yok)
-
-                        // Transform edilmiş görüntüde Y ekseni = mesafe (0=yakın, 640=uzak)
-                        float distance = (yolo_centerY / 640.0f) * range;
-
-                        // Transform edilmiş görüntüde X ekseni = bearing
-                        // Ters transform: 640x640 → 1992x256 koordinatına geri dön
-                        // Rotation 90 derece sağa olduğu için:
-                        // Original X = transformed Y
-                        // Original Y = 640 - transformed X
-
-                        float original_y = yolo_centerX;  // Rotasyon sonrası
-                        float original_x = 640.0f - (yolo_centerY + det.box.height);  // Ters rotasyon
-
-                        // Bearing hesapla (orijinal width=1992 üzerinden)
-                        float normalized_x = original_y / 640.0f;  // 0-1 arası
+                        // X → Bearing index
+                        float normalized_x = (640.0f - yolo_centerX) / 640.0f;
                         int bearingIndex = (int)(normalized_x * width);
                         bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
 
-                        // Bearing açısını al
                         float bearingRad = 0.0f;
                         if (pEntry->m_pBrgs) {
                             bearingRad = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
                         }
 
+                        // Y → Distance (mesafe)
+                        float distance = ((640.0f - yolo_centerY) / 640.0f) * range;
+
                         // Polar to Cartesian
                         float x = distance * sin(bearingRad);
                         float y = distance * cos(bearingRad);
 
-                        // Nesne boyutları
                         float objectWidthMeters = (det.box.width / 640.0f) * range * 0.2f;
                         float objectHeightMeters = (det.box.height / 640.0f) * range * 0.15f;
+
 
                         SonarSurface::DetectedObject obj;
                         obj.meterPos = QPointF(x, y);
@@ -899,11 +867,10 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                 }
 
             } catch (const std::exception& e) {
-                qDebug() << "YOLO ERROR:" << e.what();
+                qDebug() << "*** YOLO ERROR:" << e.what() << "***";
                 m_yoloEnabled = false;
             }
         }
-
 
         m_logger.LogData(rt_oculusSonar, ver, false, pEntry->m_rawSize, pEntry->m_pRaw);
         m_info.setText("Logging To: '" + m_logger.m_fileName + "' Size: " + QString::number((double)m_logger.m_loggedSize / (1024 * 1024), 'f', 1));
@@ -1058,13 +1025,11 @@ void MainView::OnNewPayload(unsigned short type, unsigned short version, double 
     // Sonar head data - initialise the sonar view and the review characteristics
     else if (type == rt_apSonarHeader)
     {
-        //qDebug() << "Header";
 
         if (payloadSize == sizeof(ApSonarDataHeader))
         {
             memcpy(&m_sonarReplay, pPayload, sizeof(ApSonarDataHeader));
 
-            //qDebug() << "Freq: " << m_sonarReplay.frequency;
 
             // Update the image extents
             m_pSonarSurface->UpdateFan(m_sonarReplay.range, m_sonarReplay.nBrgs, m_sonarReplay.pBrgs);
@@ -1098,8 +1063,6 @@ void MainView::OnNewPayload(unsigned short type, unsigned short version, double 
                 // Update the dipslay
                 m_fanDisplay.update();
             }
-            else
-                qDebug() << "The 8 bit image has incorrect size. PL:" + QString::number(payloadSize) + " IS:" + QString::number(m_sonarReplay.nBrgs * m_sonarReplay.nRngs);
         }
     }
 }
@@ -1180,7 +1143,6 @@ void MainView::ReviewUpperEntryChanged(int entry) {
 // ----------------------------------------------------------------------------
 void MainView::PlayNext()
 {
-    //qDebug() << "Play next";
 
     if (0 <= m_index && m_index < m_nEntries - 2)
     {
@@ -1201,13 +1163,10 @@ void MainView::PlayNext()
 
         QDateTime nextTime = QDateTime::fromMSecsSinceEpoch((quint64)(next * 1000.0));
 
-        //qDebug() << m_payloadDateTime;
-        //qDebug() << nextTime;
 
         // Work out the time delta
         qint64 delta = m_payloadDateTime.msecsTo(nextTime);
 
-        //qDebug() << "Delta time: " << delta;
 
         // Default to a 10Hz replay speed if the delta time is stupid
         if ((delta < 10) || (delta > 500))
@@ -1226,7 +1185,6 @@ void MainView::PlayNext()
     }
 
     if (m_index == (m_nEntries-2)) {
-        qDebug() << "Stop replay";
         this->StopReplay();
     }
 
@@ -1478,7 +1436,6 @@ void MainView::SocketReconnecting() {
 
 // ----------------------------------------------------------------------------
 void MainView::SocketDisconnected() {
-    //qDebug() << "Timeout state: " << m_timeout;
 
     m_infoForm.hide();
 
@@ -2023,8 +1980,7 @@ void MainView::resizeEvent(QResizeEvent* event)
 void MainView::CreateYoloCheckbox()
 {
     m_yoloCheckbox = new QCheckBox("YOLO Detection", this);
-    m_yoloCheckbox->setGeometry(10, 120, 150, 25);  // Sol üst, 3 satır alta
-    m_yoloCheckbox->setChecked(m_yoloEnabled);
+    m_yoloCheckbox->setGeometry(10, 120, 150, 25);
 
     m_yoloCheckbox->setStyleSheet(
         "QCheckBox {"
@@ -2054,6 +2010,8 @@ void MainView::CreateYoloCheckbox()
     connect(m_yoloCheckbox, &QCheckBox::toggled,
             this, &MainView::OnYoloCheckboxToggled);
     
+    m_yoloCheckbox->setChecked(m_yoloEnabled);
+    
     // Detection Params Button
     QPushButton* detectionParamsBtn = new QPushButton("Detection Params", this);
     detectionParamsBtn->setGeometry(10, 150, 150, 30);
@@ -2079,9 +2037,9 @@ void MainView::CreateYoloCheckbox()
         m_detectionParamsWidget->raise();
     });
     
-    // Show Detections Checkbox
-    m_showDetectionsCheckbox->setGeometry(10, 185, 150, 25);
-    m_showDetectionsCheckbox->setStyleSheet(
+    // Generate Dataset Checkbox
+    m_generateDatasetCheckbox->setGeometry(10, 185, 150, 25);
+    m_generateDatasetCheckbox->setStyleSheet(
         "QCheckBox {"
         "   color: #FFD700;"
         "   font-weight: bold;"
@@ -2112,14 +2070,19 @@ void MainView::CreateYoloCheckbox()
 void MainView::OnYoloCheckboxToggled(bool checked)
 {
     m_yoloEnabled = checked;
+    
+    // YOLO checkbox sonar'da detection göstermeyi kontrol eder
+    if (m_pSonarSurface) {
+        m_pSonarSurface->m_showDetections = checked;
+    }
 
     // Unchecked olunca detections'ları temizle
     if (!checked && m_pSonarSurface) {
         QList<SonarSurface::DetectedObject> emptyList;
         m_pSonarSurface->SetDetections(emptyList);
+        m_fanDisplay.update();
     }
 
-    qDebug() << "YOLO detection:" << (checked ? "ENABLED" : "DISABLED");
 }
 
 void MainView::analyzeImage(int height, int width, uchar* image,
@@ -2246,26 +2209,17 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     }
 
     if (significantObjects.size() > 0) {
-        qDebug() << QString("=== %1 NESNE ===").arg(significantObjects.size());
 
         for (size_t i = 0; i < significantObjects.size(); i++) {
             cv::Rect bbox = std::get<0>(significantObjects[i]);
             double objRange = std::get<1>(significantObjects[i]);
 
-            qDebug() << QString("%1: %2x%3 @(%4,%5) %6m")
-                            .arg(i+1)
-                            .arg(bbox.width)
-                            .arg(bbox.height)
-                            .arg(bbox.x)
-                            .arg(bbox.y)
-                            .arg(objRange, 0, 'f', 1);
         }
 
-        // Send detections to sonar surface
-        if (m_showDetectionsCheckbox && m_showDetectionsCheckbox->isChecked()) {
-            QList<SonarSurface::DetectedObject> detections;
-            
-            for (size_t i = 0; i < significantObjects.size(); i++) {
+        // Send detections to sonar surface (her zaman gönder, render'da m_showDetections kontrol edilir)
+        QList<SonarSurface::DetectedObject> detections;
+        
+        for (size_t i = 0; i < significantObjects.size(); i++) {
                 cv::Rect bbox = std::get<0>(significantObjects[i]);
                 double objRange = std::get<1>(significantObjects[i]);
                 
@@ -2307,9 +2261,8 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             
             m_pSonarSurface->SetDetections(detections);
             m_fanDisplay.update();
-        }
 
-        if(m_showDetectionsCheckbox && m_showDetectionsCheckbox->isChecked())
+        if(m_generateDatasetCheckbox && m_generateDatasetCheckbox->isChecked())
         {
             // if (!directoryPath.isEmpty()) {
             //     QDir dir(directoryPath);
@@ -2366,7 +2319,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                         QTextStream out(&classesFile);
                         out << "object\n";
                         classesFile.close();
-                        qDebug() << "Created classes.txt:" << classesPath;
                         classesFileCreated = true;
                     }
                 }
@@ -2410,7 +2362,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                     }
 
                     labelFile.close();
-                    qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
                 }
             }
         }
@@ -2423,10 +2374,8 @@ void MainView::OnDetectionParamsChanged(const DetectionParameters& params)
     m_detectionParams = params;
 }
 
-void MainView::OnShowDetectionsToggled(bool checked)
+void MainView::OnGenerateDatasetToggled(bool checked)
 {
-    if (m_pSonarSurface) {
-        m_pSonarSurface->m_showDetections = checked;
-        m_fanDisplay.update();
-    }
+    // Generate Dataset checkbox sadece analyzeImage() çağrısını kontrol eder
+    // Sonar'da gösterme YOLO checkbox tarafından kontrol edilir
 }

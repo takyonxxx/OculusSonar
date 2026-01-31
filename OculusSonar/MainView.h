@@ -216,7 +216,7 @@ private slots:
     void OnClearHexViewer();
     void OnYoloCheckboxToggled(bool checked);
     void OnDetectionParamsChanged(const DetectionParameters& params);
-    void OnShowDetectionsToggled(bool checked);
+    void OnGenerateDatasetToggled(bool checked);
 
 
 private:
@@ -245,7 +245,7 @@ private:
 
     DetectionParamsWidget* m_detectionParamsWidget;
     DetectionParameters m_detectionParams;
-    QCheckBox* m_showDetectionsCheckbox;
+    QCheckBox* m_generateDatasetCheckbox;
 
     
 
