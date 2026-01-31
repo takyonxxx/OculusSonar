@@ -25,10 +25,6 @@
 #include "ConnectForm.h"
 #include "ModeCtrls.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include "Windows.h"
-#include "qt_windows.h"
-
 double MainView::NAVIGATION_RANGES[] = { 1, 2, 5, 7.5, 10, 20, 30, 40, 50, 75, 100, 120, 140, 160, 180, 200 };
 double MainView::INSPECTION_RANGES[] = { 0.3, 0.5, 1, 2, 3, 4, 5, 7.5, 10, 20, 40 };
 
@@ -41,17 +37,17 @@ MainView::MainView(QWidget *parent) :
     m_reviewCtrls(this),
     m_toolsCtrls(this),
     m_palSelect(this),
-    m_settings(this),
-    m_fanDisplay(this),
-    m_connectForm(this),
-    m_info(this),
-    m_deviceForm(this),
     m_infoCtrls(this),
     m_cursorCtrls(this),
     m_infoForm(this),
-    m_timeout(false),
-    m_reconnect(false),
     m_helpForm(this),
+    m_settings(this),
+    m_connectForm(this),
+    m_deviceForm(this),
+    m_fanDisplay(this),
+    m_info(this),
+    m_reconnect(false),
+    m_timeout(false),
     m_hexViewer(nullptr),
     m_hexContainer(nullptr),
     m_showHexViewer(false),
@@ -2264,6 +2260,28 @@ void MainView::analyzeImage(int height, int width, uchar* image,
 
         if(m_generateDatasetCheckbox && m_generateDatasetCheckbox->isChecked())
         {
+                if (!directoryPath.isEmpty()) {
+                    QDir dir(directoryPath);
+                    if (!dir.exists()) {
+                        dir.mkpath(".");
+                    }
+
+                    // Timestamp ile unique dosya ismi
+                    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+                    QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+                    QString imageFullPath = dir.filePath(imageFilename);
+
+                    // Rotated image'i kaydet (YOLO için 640x640 RGB)
+                    cv::Mat rgbImg;
+                    cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+
+                    cv::Mat rotatedImg;
+                    cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
+
+                    // Image'i kaydet
+                    cv::imwrite(imageFullPath.toStdString(), rotatedImg);
+                }
+
             // if (!directoryPath.isEmpty()) {
             //     QDir dir(directoryPath);
             //     if (!dir.exists()) {
@@ -2305,65 +2323,65 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
             // Dataset oluşturmak için bu yorumu kaldır
 
-            if (!directoryPath.isEmpty()) {
-                QDir dir(directoryPath);
-                if (!dir.exists()) {
-                    dir.mkpath(".");
-                }
+            // if (!directoryPath.isEmpty()) {
+            //     QDir dir(directoryPath);
+            //     if (!dir.exists()) {
+            //         dir.mkpath(".");
+            //     }
 
-                static bool classesFileCreated = false;
-                if (!classesFileCreated) {
-                    QString classesPath = dir.absoluteFilePath("classes.txt");
-                    QFile classesFile(classesPath);
-                    if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                        QTextStream out(&classesFile);
-                        out << "object\n";
-                        classesFile.close();
-                        classesFileCreated = true;
-                    }
-                }
+            //     static bool classesFileCreated = false;
+            //     if (!classesFileCreated) {
+            //         QString classesPath = dir.absoluteFilePath("classes.txt");
+            //         QFile classesFile(classesPath);
+            //         if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            //             QTextStream out(&classesFile);
+            //             out << "object\n";
+            //             classesFile.close();
+            //             classesFileCreated = true;
+            //         }
+            //     }
 
-                QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-                QString imageFilename = QString("sonar_%1.png").arg(timestamp);
-                QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+            //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+            //     QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+            //     QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
 
-                QString imageFullPath = dir.filePath(imageFilename);
-                QString labelFullPath = dir.filePath(labelFilename);
+            //     QString imageFullPath = dir.filePath(imageFilename);
+            //     QString labelFullPath = dir.filePath(labelFilename);
 
-                cv::Mat rgbImg;
-                cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+            //     cv::Mat rgbImg;
+            //     cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
 
-                cv::Mat rotatedImg;
-                cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
-                cv::imwrite(imageFullPath.toStdString(), rotatedImg);
+            //     cv::Mat rotatedImg;
+            //     cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
+            //     cv::imwrite(imageFullPath.toStdString(), rotatedImg);
 
-                QFile labelFile(labelFullPath);
-                if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                    QTextStream out(&labelFile);
+            //     QFile labelFile(labelFullPath);
+            //     if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            //         QTextStream out(&labelFile);
 
-                    for (size_t i = 0; i < significantObjects.size(); i++) {
-                        cv::Rect bbox = std::get<0>(significantObjects[i]);
+            //         for (size_t i = 0; i < significantObjects.size(); i++) {
+            //             cv::Rect bbox = std::get<0>(significantObjects[i]);
 
-                        double rotated_x = 640.0 - bbox.y - bbox.height;
-                        double rotated_y = bbox.x;
-                        double rotated_width = bbox.height;
-                        double rotated_height = bbox.width;
+            //             double rotated_x = 640.0 - bbox.y - bbox.height;
+            //             double rotated_y = bbox.x;
+            //             double rotated_width = bbox.height;
+            //             double rotated_height = bbox.width;
 
-                        double x_center = (rotated_x + rotated_width / 2.0) / 640.0;
-                        double y_center = (rotated_y + rotated_height / 2.0) / 640.0;
-                        double norm_width = rotated_width / 640.0;
-                        double norm_height = rotated_height / 640.0;
+            //             double x_center = (rotated_x + rotated_width / 2.0) / 640.0;
+            //             double y_center = (rotated_y + rotated_height / 2.0) / 640.0;
+            //             double norm_width = rotated_width / 640.0;
+            //             double norm_height = rotated_height / 640.0;
 
-                        out << "0 "
-                            << QString::number(x_center, 'f', 6) << " "
-                            << QString::number(y_center, 'f', 6) << " "
-                            << QString::number(norm_width, 'f', 6) << " "
-                            << QString::number(norm_height, 'f', 6) << "\n";
-                    }
+            //             out << "0 "
+            //                 << QString::number(x_center, 'f', 6) << " "
+            //                 << QString::number(y_center, 'f', 6) << " "
+            //                 << QString::number(norm_width, 'f', 6) << " "
+            //                 << QString::number(norm_height, 'f', 6) << "\n";
+            //         }
 
-                    labelFile.close();
-                }
-            }
+            //         labelFile.close();
+            //     }
+            // }
         }
     }
 }
