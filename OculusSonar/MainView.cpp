@@ -2073,7 +2073,7 @@ void MainView::analyzeImage(int height, int width, uchar* image,
 
     // ÇİFT EŞİK: Hem parlak hem koyu nesneler için
     // Parlak nesneler için (mean'in üstü)
-    double highThreshold = mean[0] + 1.5 * stddev[0];
+    double highThreshold = mean[0] + 2.0 * stddev[0];
     cv::Mat brightMask;
     cv::threshold(finalImg, brightMask, highThreshold, 255, cv::THRESH_BINARY);
 
