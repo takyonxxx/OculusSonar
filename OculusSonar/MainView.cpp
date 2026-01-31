@@ -773,30 +773,32 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        //analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
+        analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
 
-        // YOLO OBJECT DETECTION - FIXED VERSION
+        // YOLO OBJECT DETECTION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
             try {
-                // ========== AYNI TRANSFORM - Dataset ile aynı! ==========
-                // 1. Ham sonar görüntüsünü oluştur
+                // Transform: Transpose + Flip + Resize + RGB (Dataset ile AYNI!)
                 cv::Mat sonarImage(height, width, CV_8UC1, pEntry->m_pImage);
-
-                // 2. Transpose + Flip (Dataset ile aynı)
+                
                 cv::Mat transformedImg;
                 cv::transpose(sonarImage, transformedImg);
                 cv::flip(transformedImg, transformedImg, 1);
-
-                // 3. 640x640 resize (Dataset ile aynı)
+                
                 cv::Mat resizedImg;
                 cv::resize(transformedImg, resizedImg, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
-                cv::imwrite("/tmp/yolo_input.png", resizedImg);
-
-                // ========== TRANSFORM SONU ==========
-
-                // 4. YOLO inference (şimdi doğru formatta!)
+                
+                cv::Mat rgbImg;
+                cv::cvtColor(resizedImg, rgbImg, cv::COLOR_GRAY2RGB);
+                
+                static int frameCount = 0;
+                if (frameCount < 5) {
+                    cv::imwrite("/tmp/yolo_input_" + std::to_string(frameCount) + ".png", rgbImg);
+                    frameCount++;
+                }
+                
                 std::vector<DL_RESULT> results;
-                m_yoloDetector->RunSession(resizedImg, results);  // ← Artık 640x640 transform edilmiş görüntü
+                m_yoloDetector->RunSession(rgbImg, results);
 
                 if (!results.empty()) {
                     std::sort(results.begin(), results.end(),
@@ -806,52 +808,29 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
 
                     int maxDetections = 10;
                     int numToShow = std::min((int)results.size(), maxDetections);
-
                     QList<SonarSurface::DetectedObject> detections;
 
                     for (int i = 0; i < numToShow; i++) {
                         const auto& det = results[i];
 
-                        // ========== KOORDİNAT DÖNÜŞÜMLERİ ==========
-                        // YOLO 640x640 transform edilmiş görüntüde tespit etti
-                        // Şimdi gerçek sonar koordinatlarına dönüştürmeliyiz
-
-                        // YOLO sonuçları 640x640 üzerinde
                         float yolo_centerX = det.box.x + det.box.width / 2.0f;
                         float yolo_centerY = det.box.y + det.box.height / 2.0f;
 
-                        // 640x640'tan orijinal transform edilmiş koordinatlara
-                        // (transform edilmiş görüntü zaten 640x640, değişiklik yok)
-
-                        // Transform edilmiş görüntüde Y ekseni = mesafe (0=yakın, 640=uzak)
                         float distance = (yolo_centerY / 640.0f) * range;
-
-                        // Transform edilmiş görüntüde X ekseni = bearing
-                        // Ters transform: 640x640 → 1992x256 koordinatına geri dön
-                        // Rotation 90 derece sağa olduğu için:
-                        // Original X = transformed Y
-                        // Original Y = 640 - transformed X
-
-                        float original_y = yolo_centerX;  // Rotasyon sonrası
-                        float original_x = 640.0f - (yolo_centerY + det.box.height);  // Ters rotasyon
-
-                        // Bearing hesapla (orijinal width=1992 üzerinden)
-                        float normalized_x = original_y / 640.0f;  // 0-1 arası
+                        
+                        float normalized_x = yolo_centerX / 640.0f;
                         int bearingIndex = (int)(normalized_x * width);
                         bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
-
-                        // Bearing açısını al
+                        
                         float bearingRad = 0.0f;
                         if (pEntry->m_pBrgs) {
                             bearingRad = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
                         }
 
-                        // Polar to Cartesian
                         float x = distance * sin(bearingRad);
                         float y = distance * cos(bearingRad);
 
-                        // Nesne boyutları
-                        float objectWidthMeters = (det.box.width / 640.0f) * range * 0.2f;
+                        float objectWidthMeters = (det.box.width / 640.0f) * range * 0.15f;
                         float objectHeightMeters = (det.box.height / 640.0f) * range * 0.15f;
 
                         SonarSurface::DetectedObject obj;
@@ -859,7 +838,6 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                         obj.meterWidth = objectWidthMeters;
                         obj.meterHeight = objectHeightMeters;
                         obj.confidence = det.confidence;
-
                         detections.append(obj);
                     }
 
@@ -2244,9 +2222,9 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             QString imageFullPath = dir.filePath(imageFilename);
             QString labelFullPath = dir.filePath(labelFilename);
 
-            cv::Mat rotatedFinalImg;
-            cv::rotate(finalImg, rotatedFinalImg, cv::ROTATE_90_CLOCKWISE);
-            cv::imwrite(imageFullPath.toStdString(), rotatedFinalImg);
+            cv::Mat rgbImg;
+            cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+            cv::imwrite(imageFullPath.toStdString(), rgbImg);
 
             QFile labelFile(labelFullPath);
             if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -2255,18 +2233,10 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                 for (size_t i = 0; i < significantObjects.size(); i++) {
                     cv::Rect bbox = std::get<0>(significantObjects[i]);
 
-                    double img_width = 640.0;
-                    double img_height = 640.0;
-
-                    double rotated_x = bbox.y;
-                    double rotated_y = img_width - (bbox.x + bbox.width);
-                    double rotated_width = bbox.height;
-                    double rotated_height = bbox.width;
-
-                    double x_center = (rotated_x + rotated_width / 2.0) / img_width;
-                    double y_center = (rotated_y + rotated_height / 2.0) / img_height;
-                    double norm_width = rotated_width / img_width;
-                    double norm_height = rotated_height / img_height;
+                    double x_center = (bbox.x + bbox.width / 2.0) / 640.0;
+                    double y_center = (bbox.y + bbox.height / 2.0) / 640.0;
+                    double norm_width = bbox.width / 640.0;
+                    double norm_height = bbox.height / 640.0;
 
                     out << "0 "
                         << QString::number(x_center, 'f', 6) << " "
