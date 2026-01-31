@@ -188,6 +188,9 @@ public slots:
     void saveImageAsPng(int height, int width, uchar* image,
                         short* bearings, double range,
                         const QString& directoryPath);
+    void analyzeImage(int height, int width, uchar* image,
+                                short* bearings, double range,
+                                const QString& directoryPath);
     void SaveRenderedSonarImage_NoGrid();
     void saveImageWithAutoLabel(int height, int width, uchar* image,
                                           short* bearings, double range,
