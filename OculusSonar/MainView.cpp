@@ -2118,358 +2118,249 @@ void MainView::OnYoloCheckboxToggled(bool checked)
     qDebug() << "YOLO detection:" << (checked ? "ENABLED" : "DISABLED");
 }
 
-void MainView::saveImageWithAutoLabel(int height, int width, uchar* image,
-                                      short* bearings, double range,
-                                      const QString& directoryPath)
-{
-    static bool classesFileCreated = false;
-    if (!classesFileCreated) {
-        QString classesPath = QDir(directoryPath).absoluteFilePath("classes.txt");
-        std::ofstream classesFile(classesPath.toStdString());
-        for (const auto& className : m_yoloParams.classNames) {
-            classesFile << className << std::endl;
-        }
-        classesFile.close();
-        classesFileCreated = true;
-        qDebug() << "Created classes.txt:" << classesPath;
-    }
-
-    int size = 640;
-    cv::Mat cartesian = cv::Mat::zeros(size, size, CV_8UC1);
-    int centerX = size / 2;
-    int centerY = size;
-
-    for (int b = 0; b < width; b++) {
-        float bearingRad = bearings[b] * 0.01f * M_PI / 180.0f;
-        for (int r = 0; r < height; r++) {
-            float distance = (r / (float)height) * range;
-            int x = centerX + (int)(distance * sin(bearingRad) * (size / (2.0 * range)));
-            int y = centerY - (int)(distance * cos(bearingRad) * (size / range));
-            if (x >= 0 && x < size && y >= 0 && y < size) {
-                uchar pixel = image[r * width + b];
-                cartesian.at<uchar>(y, x) = std::max(cartesian.at<uchar>(y, x), pixel);
-            }
-        }
-    }
-
-    cv::Mat denoised;
-    cv::fastNlMeansDenoising(cartesian, denoised, 5, 7, 21);
-
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    cv::Mat enhanced;
-    clahe->apply(denoised, enhanced);
-
-    // ============ DAHA BÜYÜK WINDOW + MİNİMUM MORFOLOJİ ============
-
-    cv::Mat localMean;
-    cv::blur(enhanced, localMean, cv::Size(51, 51));  // 31 → 51 (DAHA BÜYÜK)
-
-    cv::Mat enhancedFloat, meanFloat;
-    enhanced.convertTo(enhancedFloat, CV_32F);
-    localMean.convertTo(meanFloat, CV_32F);
-
-    cv::Mat contrast = enhancedFloat - meanFloat;
-    cv::Mat contrastAbs = cv::abs(contrast);
-
-    double minVal, maxVal;
-    cv::minMaxLoc(contrastAbs, &minVal, &maxVal);
-
-    cv::Mat binary;
-    cv::threshold(contrastAbs, binary, 20, 255, cv::THRESH_BINARY);  // 12 → 20
-    binary.convertTo(binary, CV_8U);
-
-    cv::Mat mask = enhanced > 10;
-    cv::bitwise_and(binary, mask, binary);
-
-    // MİNİMAL MORFOLOJİ - büyük blobs oluşmasın
-    cv::Mat kernel_tiny = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-    cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel_tiny, cv::Point(-1,-1), 1);  // Sadece OPEN
-
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(binary, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    const int MIN_AREA = 100;
-    const int MAX_AREA = 5000;
-    const float MIN_ASPECT_RATIO = 0.2f;
-    const float MAX_ASPECT_RATIO = 5.0f;
-    const float MIN_Y_RATIO = 0.15f;
-    const float MAX_Y_RATIO = 0.80f;
-    const float MIN_X_RATIO = 0.15f;
-    const float MAX_X_RATIO = 0.85f;
-
-    std::vector<std::string> labels;
-    int objectCount = 0;
-
-    for (const auto& contour : contours) {
-        cv::Rect bbox = cv::boundingRect(contour);
-
-        int area = bbox.width * bbox.height;
-        if (area < MIN_AREA || area > MAX_AREA) {
-            if (area > 100000) qDebug() << "  Rejected HUGE blob: area=" << area;
-            continue;
-        }
-
-        float aspectRatio = (float)bbox.width / (float)bbox.height;
-        if (aspectRatio < MIN_ASPECT_RATIO || aspectRatio > MAX_ASPECT_RATIO) continue;
-
-        float yCenterRatio = (bbox.y + bbox.height / 2.0f) / size;
-        if (yCenterRatio < MIN_Y_RATIO || yCenterRatio > MAX_Y_RATIO) continue;
-
-        float xCenterRatio = (bbox.x + bbox.width / 2.0f) / size;
-        if (xCenterRatio < MIN_X_RATIO || xCenterRatio > MAX_X_RATIO) continue;
-
-        double contourArea = cv::contourArea(contour);
-        double solidity = contourArea / area;
-        if (solidity < 0.20) continue;
-
-        cv::Mat roiContrast = contrastAbs(bbox);
-        double meanContrast = cv::mean(roiContrast)[0];
-        if (meanContrast < 15) continue;  // 10 → 15
-
-        objectCount++;
-
-        qDebug() << ">>> OBJECT" << objectCount << "DETECTED <<<";
-        qDebug() << "  Pixel coords: x=" << bbox.x << "y=" << bbox.y
-                 << "w=" << bbox.width << "h=" << bbox.height;
-
-        float centerX_norm = (bbox.x + bbox.width / 2.0f) / size;
-        float centerY_norm = (bbox.y + bbox.height / 2.0f) / size;
-        float width_norm = (float)bbox.width / size;
-        float height_norm = (float)bbox.height / size;
-
-        std::ostringstream ss;
-        ss << std::fixed << std::setprecision(6);
-        ss << "0 " << centerX_norm << " " << centerY_norm << " "
-           << width_norm << " " << height_norm;
-
-        labels.push_back(ss.str());
-    }
-
-    if (labels.empty()) {
-        qDebug() << "No objects detected in this frame";
-        qDebug() << "==========================================";
-        return;
-    }
-
-    counter++;
-    QString baseName = QString("sonar_%1").arg(counter, 5, 10, QChar('0'));
-
-    qDebug() << "TOTAL OBJECTS:" << objectCount;
-
-    QString imagePath = QDir(directoryPath).absoluteFilePath(baseName + ".png");
-    cv::imwrite(imagePath.toStdString(), enhanced);
-
-    QString labelPath = QDir(directoryPath).absoluteFilePath(baseName + ".txt");
-    std::ofstream labelFile(labelPath.toStdString());
-    for (const auto& label : labels) {
-        labelFile << label << "\n";
-    }
-    labelFile.close();
-}
-
 void MainView::analyzeImage(int height, int width, uchar* image,
-                              short* bearings, double range,
-                              const QString& directoryPath)
+                            short* bearings, double range,
+                            const QString& directoryPath)
 {
     if (!image || height <= 0 || width <= 0) {
-        qDebug() << "Invalid image data";
         return;
     }
 
-    // OpenCV Mat oluştur (grayscale)
     cv::Mat sonarImg(height, width, CV_8UC1, image);
-    
-    // Görüntüyü düzelt: Transpose + Flip (ince uzun -> düzgün)
+
     cv::Mat rotatedImg;
-    cv::transpose(sonarImg, rotatedImg);  // 256x1992 -> 1992x256
-    cv::flip(rotatedImg, rotatedImg, 1);   // Yatay flip (ters düzeltme)
-    
-    // Direkt 640x640 resize (daha basit, aspect ratio hafif bozulur ama sorun değil)
+    cv::transpose(sonarImg, rotatedImg);
+    cv::flip(rotatedImg, rotatedImg, 1);
+
     cv::Mat finalImg;
     cv::resize(rotatedImg, finalImg, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
-    
-    // Gürültü azaltma - Gaussian blur
+
     cv::GaussianBlur(finalImg, finalImg, cv::Size(3, 3), 0);
-    
-    // İstatistikler (transform edilmiş görüntü üzerinden)
+
     cv::Scalar mean, stddev;
     cv::meanStdDev(finalImg, mean, stddev);
-    
-    // Anomali eşiği - daha yüksek (daha seçici)
-    double threshold = mean[0] + 2.0 * stddev[0];  // 1.5'ten 2.0'a çıkardık
+
+    double threshold = mean[0] + 2.0 * stddev[0];
     cv::Mat anomalyMask;
     cv::threshold(finalImg, anomalyMask, threshold, 255, cv::THRESH_BINARY);
-    
-    // Morfolojik işlemler - gürültüyü temizle
+
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
-    cv::morphologyEx(anomalyMask, anomalyMask, cv::MORPH_OPEN, kernel);  // Opening: küçük noktaları sil
-    cv::morphologyEx(anomalyMask, anomalyMask, cv::MORPH_CLOSE, kernel); // Closing: küçük delikleri kapat
-    
-    // ============================================================================
-    // 4. SADECE GERÇEK NESNELER - Sıkı Filtreleme + Gürültü Önleme
-    // ============================================================================
+    cv::morphologyEx(anomalyMask, anomalyMask, cv::MORPH_OPEN, kernel);
+    cv::morphologyEx(anomalyMask, anomalyMask, cv::MORPH_CLOSE, kernel);
+
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(anomalyMask.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-    
-    // DEBUG: Toplam bulunan contour sayısı
-    qDebug() << "[DEBUG] Toplam contour sayısı:" << contours.size();
-    
-    // SIKILEŞTIRILMIŞ filtre kriterleri - gürültü önleme odaklı
-    int minBlobArea = 100;           // 50'den 100'e çıkardık
-    int maxBlobArea = 5000;          // YENİ: Maksimum alan (büyük dikdörtgenleri eleme)
-    int minWidth = 10;               // YENİ: Minimum genişlik (çok ince çizgileri eleme)
-    int minHeight = 10;              // YENİ: Minimum yükseklik
-    int maxWidth = 200;              // YENİ: Maksimum genişlik (çok geniş pattern'leri eleme)
-    int maxHeight = 200;             // YENİ: Maksimum yükseklik
-    double minIntensity = 140.0;     // 120'den 140'a çıkardık (daha parlak nesneler)
-    double minAspectRatio = 0.3;     // 0.15'ten 0.3'e çıkardık (çok ince elenir)
-    double maxAspectRatio = 3.0;     // 6.0'dan 3.0'a düşürdük (çok uzun elenir)
-    double minSolidity = 0.5;        // 0.4'ten 0.5'e çıkardık (daha kompakt)
-    double minCompactness = 0.15;    // YENİ: Kompaktlık kontrolü
-    
+
+    int minBlobArea = 500;
+    int maxBlobArea = 20000;
+    int minWidth = 20;
+    int minHeight = 20;
+    int maxWidth = 250;
+    int maxHeight = 250;
+    double minIntensity = 130.0;
+    double minAspectRatio = 0.3;
+    double maxAspectRatio = 3.0;
+    double minSolidity = 0.4;
+     double minCompactness = 0.3;
+
+    //minSolidity
+    // 1.0 = tamamen dolu (kare, daire)
+    // 0.8 = biraz girintili ama hala kompakt
+    // 0.5 = orta düzey girintili
+    // 0.2 = çok girintili, saçılmış
+
+    //minCompactness
+    // 1.0 = mükemmel daire (en kompakt şekil)
+    // 0.8 = kare
+    // 0.5-0.7 = normal nesneler (balık, kaya)
+    // 0.2-0.4 = uzunca dikdörtgen
+    // 0.1 = çok uzun ince şekil
+    // < 0.1 = düzensiz gürültü pattern'i
+
     std::vector<std::tuple<cv::Rect, double, double>> significantObjects;
-    
-    int filteredByArea = 0;
-    int filteredBySize = 0;
-    int filteredByAspect = 0;
-    int filteredByIntensity = 0;
-    int filteredBySolidity = 0;
-    int filteredByCompactness = 0;
-    
+
     for (size_t i = 0; i < contours.size(); i++) {
-        double area = cv::contourArea(contours[i]);
-        
-        // Alan kontrolü (minimum ve maksimum)
-        if (area < minBlobArea || area > maxBlobArea) {
-            filteredByArea++;
-            continue;
-        }
-        
-        // Blob özellikleri
         cv::Rect bbox = cv::boundingRect(contours[i]);
-        
-        // Boyut kontrolü (width ve height)
-        if (bbox.width < minWidth || bbox.width > maxWidth || 
-            bbox.height < minHeight || bbox.height > maxHeight) {
-            filteredBySize++;
+
+        // BOUNDING BOX ALANI ile filtrele (görseldeki alan ile aynı)
+        int bboxArea = bbox.width * bbox.height;
+
+        if (bboxArea < minBlobArea || bboxArea > maxBlobArea) {
             continue;
         }
-        
-        // Aspect ratio kontrolü (width/height)
+
+        if (bbox.width < minWidth || bbox.width > maxWidth ||
+            bbox.height < minHeight || bbox.height > maxHeight) {
+            continue;
+        }
+
         double aspectRatio = (double)bbox.width / bbox.height;
         if (aspectRatio < minAspectRatio || aspectRatio > maxAspectRatio) {
-            filteredByAspect++;
             continue;
         }
-        
-        // Kompaktlık kontrolü - gerçek nesneler daha yuvarlak/kompakt
+
+        // Gerçek contour alanı - sadece solidity ve compactness için
+        double contourArea = cv::contourArea(contours[i]);
         double perimeter = cv::arcLength(contours[i], true);
-        double compactness = (4.0 * 3.14159265359 * area) / (perimeter * perimeter);
+        double compactness = (4.0 * 3.14159265359 * contourArea) / (perimeter * perimeter);
         if (compactness < minCompactness) {
-            filteredByCompactness++;
             continue;
         }
-        
-        // Ortalama parlaklık kontrolü
+
         cv::Mat mask = cv::Mat::zeros(finalImg.size(), CV_8UC1);
         cv::drawContours(mask, contours, i, cv::Scalar(255), cv::FILLED);
         cv::Scalar blobMean = cv::mean(finalImg, mask);
-        
+
         if (blobMean[0] < minIntensity) {
-            filteredByIntensity++;
             continue;
         }
-        
-        // Solidity kontrolü (doluluğu)
+
         std::vector<cv::Point> hull;
         cv::convexHull(contours[i], hull);
         double hullArea = cv::contourArea(hull);
-        double solidity = area / hullArea;
+        double solidity = contourArea / hullArea;
         if (solidity < minSolidity) {
-            filteredBySolidity++;
             continue;
         }
-        
-        // Mesafe hesaplama (640x640 transform edilmiş görüntü için)
+
         cv::Moments moments = cv::moments(contours[i]);
         float centerY = moments.m01 / moments.m00;
-        
-        // Orijinal sonar range'ini kullan
         float objectRange = (centerY / 640.0) * range;
-        
+
         significantObjects.push_back(std::make_tuple(bbox, objectRange, blobMean[0]));
     }
-    
-    // DEBUG: Filtreleme istatistikleri
-    qDebug() << "[DEBUG] Filtreleme sonuçları:";
-    qDebug() << "  - Alan (çok küçük/büyük):" << filteredByArea;
-    qDebug() << "  - Boyut (width/height):" << filteredBySize;
-    qDebug() << "  - Aspect ratio:" << filteredByAspect;
-    qDebug() << "  - Kompaktlık düşük:" << filteredByCompactness;
-    qDebug() << "  - Parlaklık düşük:" << filteredByIntensity;
-    qDebug() << "  - Solidity düşük:" << filteredBySolidity;
-    qDebug() << "  - BAŞARILI:" << significantObjects.size();
-    
-    // SADECE nesne tespit edildiyse log göster
+
     if (significantObjects.size() > 0) {
-        qDebug() << QString("\n=== TESPIT EDİLEN NESNELER === %1 adet").arg(significantObjects.size());
-        
+        qDebug() << QString("=== %1 NESNE ===").arg(significantObjects.size());
+
         for (size_t i = 0; i < significantObjects.size(); i++) {
             cv::Rect bbox = std::get<0>(significantObjects[i]);
             double objRange = std::get<1>(significantObjects[i]);
-            double intensity = std::get<2>(significantObjects[i]);
-            
-            qDebug() << QString("Nesne %1: %2x%3 pixel @ pos(%4, %5) - Mesafe: %6m")
-                        .arg(i+1)
-                        .arg(bbox.width)
-                        .arg(bbox.height)
-                        .arg(bbox.x)
-                        .arg(bbox.y)
-                        .arg(objRange, 0, 'f', 1);
+
+            qDebug() << QString("%1: %2x%3 @(%4,%5) %6m")
+                            .arg(i+1)
+                            .arg(bbox.width)
+                            .arg(bbox.height)
+                            .arg(bbox.x)
+                            .arg(bbox.y)
+                            .arg(objRange, 0, 'f', 1);
         }
-        
-        // 2'den fazla nesne varsa görüntüyü kaydet
-        if (significantObjects.size() > 2 && !directoryPath.isEmpty()) {
+
+        // Etiketli görüntü kaydetme (2'den fazla nesne varsa)
+        if (!directoryPath.isEmpty()) {
             QDir dir(directoryPath);
             if (!dir.exists()) {
                 dir.mkpath(".");
             }
-            
-            // Görüntüyü renkli yapıp üzerine bounding box'ları çiz
+
             cv::Mat colorImg;
             cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
-            
+
             for (size_t i = 0; i < significantObjects.size(); i++) {
                 cv::Rect bbox = std::get<0>(significantObjects[i]);
-                
-                // Bounding box çiz (yeşil renk)
+                int area = bbox.width * bbox.height;
                 cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
-                
-                // Nesne numarasını yaz
-                QString label = QString("%1").arg(i+1);
-                cv::putText(colorImg, label.toStdString(), 
-                           cv::Point(bbox.x, bbox.y - 5),
-                           cv::FONT_HERSHEY_SIMPLEX, 0.5, 
-                           cv::Scalar(0, 255, 0), 2);
+
+                // Nesne numarası ve boyutu: "1: 25x40=1000"
+                QString label = QString("%1: %2x%3=%4")
+                                    .arg(i+1)
+                                    .arg(bbox.width)
+                                    .arg(bbox.height)
+                                    .arg(area);
+
+                cv::putText(colorImg, label.toStdString(),
+                            cv::Point(bbox.x, bbox.y - 5),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                            cv::Scalar(0, 255, 0), 2);
             }
-            
-            // Timestamp ile unique filename
+
+            // 90 derece sağa döndür (yelpaze yukarı baksın)
+            cv::Mat rotatedColorImg;
+            cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
+
             QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
             QString filename = QString("detected_%1_objects_%2.png")
-                              .arg(significantObjects.size())
-                              .arg(timestamp);
+                                   .arg(significantObjects.size())
+                                   .arg(timestamp);
             QString fullPath = dir.filePath(filename);
-            
-            // OpenCV ile kaydet
-            if (cv::imwrite(fullPath.toStdString(), colorImg)) {
-                qDebug() << "Görüntü kaydedildi:" << fullPath;
-            } else {
-                qDebug() << "HATA: Görüntü kaydedilemedi:" << fullPath;
+
+            cv::imwrite(fullPath.toStdString(), rotatedColorImg);
+        }
+
+        // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
+        // Dataset oluşturmak için bu yorumu kaldır
+        /*
+        if (!directoryPath.isEmpty()) {
+            QDir dir(directoryPath);
+            if (!dir.exists()) {
+                dir.mkpath(".");
+            }
+
+            // classes.txt dosyasını oluştur (sadece bir kez)
+            static bool classesFileCreated = false;
+            if (!classesFileCreated) {
+                QString classesPath = dir.absoluteFilePath("classes.txt");
+                QFile classesFile(classesPath);
+                if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    QTextStream out(&classesFile);
+                    out << "object\n";
+                    classesFile.close();
+                    qDebug() << "Created classes.txt:" << classesPath;
+                    classesFileCreated = true;
+                }
+            }
+
+            // Timestamp ile unique filename
+            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+            QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+            QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+
+            QString imageFullPath = dir.filePath(imageFilename);
+            QString labelFullPath = dir.filePath(labelFilename);
+
+            // Görüntüyü 90 derece sağa döndür ve kaydet
+            cv::Mat rotatedFinalImg;
+            cv::rotate(finalImg, rotatedFinalImg, cv::ROTATE_90_CLOCKWISE);
+            cv::imwrite(imageFullPath.toStdString(), rotatedFinalImg);
+
+            // YOLO format label dosyası oluştur
+            QFile labelFile(labelFullPath);
+            if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&labelFile);
+
+                for (size_t i = 0; i < significantObjects.size(); i++) {
+                    cv::Rect bbox = std::get<0>(significantObjects[i]);
+
+                    double img_width = 640.0;
+                    double img_height = 640.0;
+
+                    // 90 derece sağa döndürme transformasyonu
+                    double rotated_x = bbox.y;
+                    double rotated_y = img_width - (bbox.x + bbox.width);
+                    double rotated_width = bbox.height;
+                    double rotated_height = bbox.width;
+
+                    // YOLO format: normalize edilmiş koordinatlar
+                    double x_center = (rotated_x + rotated_width / 2.0) / img_width;
+                    double y_center = (rotated_y + rotated_height / 2.0) / img_height;
+                    double norm_width = rotated_width / img_width;
+                    double norm_height = rotated_height / img_height;
+
+                    // class_id = 0 (object)
+                    out << "0 "
+                        << QString::number(x_center, 'f', 6) << " "
+                        << QString::number(y_center, 'f', 6) << " "
+                        << QString::number(norm_width, 'f', 6) << " "
+                        << QString::number(norm_height, 'f', 6) << "\n";
+                }
+
+                labelFile.close();
+                qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
             }
         }
+        */
+        // ========== DATASET OLUŞTURMA SONU ==========
+
         qDebug() << "";
     }
-    // Nesne yoksa hiçbir log gösterme
-    
-    qDebug() << "=========================\n";
 }
