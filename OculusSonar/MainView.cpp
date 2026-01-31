@@ -796,14 +796,6 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                 cv::Mat rotatedImg;
                 cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
 
-                static int frameCount = 0;
-                if (frameCount < 5) {
-                    QString tempDir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-                    QString debugPath = QString("%1/yolo_input_%2.png").arg(tempDir).arg(frameCount);
-                    cv::imwrite(debugPath.toStdString(), rotatedImg);
-                    frameCount++;
-                }
-
                 // 4. YOLO inference
                 std::vector<DL_RESULT> results;
                 m_yoloDetector->RunSession(rotatedImg, results);
@@ -860,6 +852,10 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                     }
 
                     m_pSonarSurface->SetDetections(detections);
+                } else {
+                    // Detection bulunamadı, eski detection'ları temizle
+                    QList<SonarSurface::DetectedObject> emptyList;
+                    m_pSonarSurface->SetDetections(emptyList);
                 }
 
             } catch (const std::exception& e) {
@@ -2027,7 +2023,7 @@ void MainView::CreateYoloCheckbox()
         "QPushButton:pressed {"
         "   background-color: rgba(0, 255, 255, 100);"
         "}"
-    );
+        );
     connect(detectionParamsBtn, &QPushButton::clicked, [this]() {
         m_detectionParamsWidget->show();
         m_detectionParamsWidget->raise();
@@ -2058,7 +2054,7 @@ void MainView::CreateYoloCheckbox()
         "   border: 2px solid #FFA500;"
         "   border-radius: 3px;"
         "}"
-    );
+        );
 
     m_yoloCheckbox->show();
 }
@@ -2131,10 +2127,10 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     int minHeight = m_detectionParams.minHeight;
     int maxWidth = m_detectionParams.maxWidth;
     int maxHeight = m_detectionParams.maxHeight;
-    double minIntensityDiff = m_detectionParams.minIntensityDiff;    // Orta hassasiyet
+    double minIntensityDiff = m_detectionParams.minIntensityDiff;
     double minAspectRatio = m_detectionParams.minAspectRatio;
     double maxAspectRatio = m_detectionParams.maxAspectRatio;
-    double minSolidity = m_detectionParams.minSolidity;          // Biraz sıkı
+    double minSolidity = m_detectionParams.minSolidity;
     double minCompactness = m_detectionParams.minCompactness;
 
     //minSolidity
@@ -2183,7 +2179,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
         cv::drawContours(mask, contours, i, cv::Scalar(255), cv::FILLED);
         cv::Scalar blobMean = cv::mean(finalImg, mask);
 
-        // YENİ: Mean'den farkı kontrol et (parlak VEYA koyu olabilir)
         double intensityDiff = std::abs(blobMean[0] - mean[0]);
         if (intensityDiff < minIntensityDiff) {
             continue;
@@ -2205,82 +2200,76 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     }
 
     if (significantObjects.size() > 0) {
+        // Send detections to sonar surface
+        QList<SonarSurface::DetectedObject> detections;
 
         for (size_t i = 0; i < significantObjects.size(); i++) {
             cv::Rect bbox = std::get<0>(significantObjects[i]);
             double objRange = std::get<1>(significantObjects[i]);
 
+            // bbox koordinatları ROTATE ÖNCESİ (transpose+flip+resize sonrası 640x640)
+            // Rotate 90° CW transform uygula
+            float old_centerX = bbox.x + bbox.width / 2.0f;
+            float old_centerY = bbox.y + bbox.height / 2.0f;
+
+            // Rotate sonrası koordinatlar
+            float rotated_centerX = old_centerY;
+            float rotated_centerY = 640.0f - old_centerX;
+
+            // X ekseni = bearing (soldan sağa)
+            // Y ekseni = range (yukarıdan aşağı)
+            float normalized_x = rotated_centerX / 640.0f;
+            int bearingIndex = (int)(normalized_x * width);
+            bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
+
+            float bearingRad = 0.0f;
+            if (bearings) {
+                bearingRad = bearings[bearingIndex] * 0.01f * M_PI / 180.0f;
+            }
+
+            // Y ekseni = mesafe
+            float distance = (rotated_centerY / 640.0f) * range;
+
+            // Polar to Cartesian
+            float x = distance * sin(bearingRad);
+            float y = distance * cos(bearingRad);
+
+            SonarSurface::DetectedObject obj;
+            obj.meterPos = QPointF(x, y);
+            obj.meterWidth = (bbox.height / 640.0) * range * 0.15;
+            obj.meterHeight = (bbox.width / 640.0) * range * 0.15;
+            obj.confidence = 1.0f;
+
+            detections.append(obj);
         }
 
-        // Send detections to sonar surface (her zaman gönder, render'da m_showDetections kontrol edilir)
-        QList<SonarSurface::DetectedObject> detections;
-        
-        for (size_t i = 0; i < significantObjects.size(); i++) {
-                cv::Rect bbox = std::get<0>(significantObjects[i]);
-                double objRange = std::get<1>(significantObjects[i]);
-                
-                // bbox koordinatları ROTATE ÖNCESİ (transpose+flip+resize sonrası 640x640)
-                // Rotate 90° CW transform uygula
-                float old_centerX = bbox.x + bbox.width / 2.0f;
-                float old_centerY = bbox.y + bbox.height / 2.0f;
-                
-                // Rotate sonrası koordinatlar
-                float rotated_centerX = old_centerY;
-                float rotated_centerY = 640.0f - old_centerX;
-                
-                // X ekseni = bearing (soldan sağa)
-                // Y ekseni = range (yukarıdan aşağı)
-                float normalized_x = rotated_centerX / 640.0f;
-                int bearingIndex = (int)(normalized_x * width);
-                bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
-                
-                float bearingRad = 0.0f;
-                if (bearings) {
-                    bearingRad = bearings[bearingIndex] * 0.01f * M_PI / 180.0f;
+        m_pSonarSurface->SetDetections(detections);
+        m_fanDisplay.update();
+
+        // Dataset generation
+        if (m_generateDatasetCheckbox && m_generateDatasetCheckbox->isChecked()) {
+
+            if (!directoryPath.isEmpty()) {
+                QDir dir(directoryPath);
+                if (!dir.exists()) {
+                    dir.mkpath(".");
                 }
-                
-                // Y ekseni = mesafe
-                float distance = (rotated_centerY / 640.0f) * range;
-                
-                // Polar to Cartesian
-                float x = distance * sin(bearingRad);
-                float y = distance * cos(bearingRad);
-                
-                SonarSurface::DetectedObject obj;
-                obj.meterPos = QPointF(x, y);
-                obj.meterWidth = (bbox.height / 640.0) * range * 0.15;  // Rotate sonrası width/height swap
-                obj.meterHeight = (bbox.width / 640.0) * range * 0.15;
-                obj.confidence = 1.0f;
-                
-                detections.append(obj);
+
+                // Timestamp ile unique dosya ismi
+                QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+                QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+                QString imageFullPath = dir.filePath(imageFilename);
+
+                // Rotated image'i kaydet (YOLO için 640x640 RGB)
+                cv::Mat rgbImg;
+                cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+
+                cv::Mat rotatedRgb;
+                cv::rotate(rgbImg, rotatedRgb, cv::ROTATE_90_CLOCKWISE);
+
+                // Image'i kaydet
+                cv::imwrite(imageFullPath.toStdString(), rotatedRgb);
             }
-            
-            m_pSonarSurface->SetDetections(detections);
-            m_fanDisplay.update();
-
-        if(m_generateDatasetCheckbox && m_generateDatasetCheckbox->isChecked())
-        {
-                if (!directoryPath.isEmpty()) {
-                    QDir dir(directoryPath);
-                    if (!dir.exists()) {
-                        dir.mkpath(".");
-                    }
-
-                    // Timestamp ile unique dosya ismi
-                    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-                    QString imageFilename = QString("sonar_%1.png").arg(timestamp);
-                    QString imageFullPath = dir.filePath(imageFilename);
-
-                    // Rotated image'i kaydet (YOLO için 640x640 RGB)
-                    cv::Mat rgbImg;
-                    cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
-
-                    cv::Mat rotatedImg;
-                    cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
-
-                    // Image'i kaydet
-                    cv::imwrite(imageFullPath.toStdString(), rotatedImg);
-                }
 
             // if (!directoryPath.isEmpty()) {
             //     QDir dir(directoryPath);
@@ -2320,7 +2309,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             //     cv::imwrite(fullPath.toStdString(), rotatedColorImg);
             // }
 
-            // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
             // Dataset oluşturmak için bu yorumu kaldır
 
             // if (!directoryPath.isEmpty()) {
@@ -2383,9 +2371,13 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             //     }
             // }
         }
+    } else {
+        // Detection bulunamadı, eski detection'ları temizle
+        QList<SonarSurface::DetectedObject> emptyList;
+        m_pSonarSurface->SetDetections(emptyList);
+        m_fanDisplay.update();
     }
 }
-
 
 void MainView::OnDetectionParamsChanged(const DetectionParameters& params)
 {
