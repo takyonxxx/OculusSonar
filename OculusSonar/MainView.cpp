@@ -117,6 +117,22 @@ MainView::MainView(QWidget *parent) :
     m_pSonarInfo = NULL;
 
     CreateHexViewer();
+    
+    // Detection params widget
+    m_detectionParamsWidget = new DetectionParamsWidget(this);
+    m_detectionParamsWidget->setVisible(false);
+    m_detectionParamsWidget->setWindowTitle("Detection Parameters");
+    m_detectionParamsWidget->setWindowFlags(Qt::Window);
+    m_detectionParams = m_detectionParamsWidget->getParams();
+    
+    m_showDetectionsCheckbox = new QCheckBox("Show Detections", this);
+    m_showDetectionsCheckbox->setChecked(false);
+    
+    connect(m_detectionParamsWidget, &DetectionParamsWidget::paramsChanged, 
+            this, &MainView::OnDetectionParamsChanged);
+    connect(m_showDetectionsCheckbox, &QCheckBox::toggled,
+            this, &MainView::OnShowDetectionsToggled);
+
 
     // Update the fan when the palette is selected
     connect(&m_palSelect, &PalWidget::PalSelected, this, &MainView::PalSelected);
@@ -2032,6 +2048,58 @@ void MainView::CreateYoloCheckbox()
 
     connect(m_yoloCheckbox, &QCheckBox::toggled,
             this, &MainView::OnYoloCheckboxToggled);
+    
+    // Detection Params Button
+    QPushButton* detectionParamsBtn = new QPushButton("Detection Params", this);
+    detectionParamsBtn->setGeometry(10, 150, 150, 30);
+    detectionParamsBtn->setStyleSheet(
+        "QPushButton {"
+        "   color: #00FFFF;"
+        "   font-weight: bold;"
+        "   font-size: 11px;"
+        "   background-color: rgba(0, 0, 0, 180);"
+        "   border: 2px solid #00FFFF;"
+        "   border-radius: 4px;"
+        "   padding: 5px;"
+        "}"
+        "QPushButton:hover {"
+        "   background-color: rgba(0, 255, 255, 50);"
+        "}"
+        "QPushButton:pressed {"
+        "   background-color: rgba(0, 255, 255, 100);"
+        "}"
+    );
+    connect(detectionParamsBtn, &QPushButton::clicked, [this]() {
+        m_detectionParamsWidget->show();
+        m_detectionParamsWidget->raise();
+    });
+    
+    // Show Detections Checkbox
+    m_showDetectionsCheckbox->setGeometry(10, 185, 150, 25);
+    m_showDetectionsCheckbox->setStyleSheet(
+        "QCheckBox {"
+        "   color: #FFD700;"
+        "   font-weight: bold;"
+        "   font-size: 12px;"
+        "   background-color: rgba(0, 0, 0, 150);"
+        "   padding: 4px;"
+        "   border-radius: 4px;"
+        "}"
+        "QCheckBox::indicator {"
+        "   width: 18px;"
+        "   height: 18px;"
+        "}"
+        "QCheckBox::indicator:unchecked {"
+        "   background-color: #333;"
+        "   border: 2px solid #666;"
+        "   border-radius: 3px;"
+        "}"
+        "QCheckBox::indicator:checked {"
+        "   background-color: #FFD700;"
+        "   border: 2px solid #FFA500;"
+        "   border-radius: 3px;"
+        "}"
+    );
 
     m_yoloCheckbox->show();
 }
@@ -2073,12 +2141,12 @@ void MainView::analyzeImage(int height, int width, uchar* image,
 
     // ÇİFT EŞİK: Hem parlak hem koyu nesneler için
     // Parlak nesneler için (mean'in üstü)
-    double highThreshold = mean[0] + 2.0 * stddev[0];
+    double highThreshold = mean[0] + m_detectionParams.highThresholdMult * stddev[0];
     cv::Mat brightMask;
     cv::threshold(finalImg, brightMask, highThreshold, 255, cv::THRESH_BINARY);
 
     // Koyu nesneler için (mean'in altı)
-    double lowThreshold = mean[0] - 1.5 * stddev[0];
+    double lowThreshold = mean[0] - m_detectionParams.lowThresholdMult * stddev[0];
     cv::Mat darkMask;
     cv::threshold(finalImg, darkMask, lowThreshold, 255, cv::THRESH_BINARY_INV);
 
@@ -2093,17 +2161,17 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(anomalyMask.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    int minBlobArea = 400;
-    int maxBlobArea = 20000;
-    int minWidth = 20;
-    int minHeight = 20;
-    int maxWidth = 250;
-    int maxHeight = 250;
-    double minIntensityDiff = 15.0;    // Orta hassasiyet
-    double minAspectRatio = 0.3;
-    double maxAspectRatio = 3.0;
-    double minSolidity = 0.25;          // Biraz sıkı
-    double minCompactness = 0.15;
+    int minBlobArea = m_detectionParams.minBlobArea;
+    int maxBlobArea = m_detectionParams.maxBlobArea;
+    int minWidth = m_detectionParams.minWidth;
+    int minHeight = m_detectionParams.minHeight;
+    int maxWidth = m_detectionParams.maxWidth;
+    int maxHeight = m_detectionParams.maxHeight;
+    double minIntensityDiff = m_detectionParams.minIntensityDiff;    // Orta hassasiyet
+    double minAspectRatio = m_detectionParams.minAspectRatio;
+    double maxAspectRatio = m_detectionParams.maxAspectRatio;
+    double minSolidity = m_detectionParams.minSolidity;          // Biraz sıkı
+    double minCompactness = m_detectionParams.minCompactness;
 
     //minSolidity
     // 1.0 = tamamen dolu (kare, daire)
@@ -2188,109 +2256,172 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                             .arg(objRange, 0, 'f', 1);
         }
 
-        // if (!directoryPath.isEmpty()) {
-        //     QDir dir(directoryPath);
-        //     if (!dir.exists()) {
-        //         dir.mkpath(".");
-        //     }
-
-        //     cv::Mat colorImg;
-        //     cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
-
-        //     for (size_t i = 0; i < significantObjects.size(); i++) {
-        //         cv::Rect bbox = std::get<0>(significantObjects[i]);
-        //         int area = bbox.width * bbox.height;
-        //         cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
-
-        //         QString label = QString("%1: %2x%3=%4")
-        //                             .arg(i+1)
-        //                             .arg(bbox.width)
-        //                             .arg(bbox.height)
-        //                             .arg(area);
-
-        //         cv::putText(colorImg, label.toStdString(),
-        //                     cv::Point(bbox.x, bbox.y - 5),
-        //                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
-        //                     cv::Scalar(0, 255, 0), 2);
-        //     }
-
-        //     cv::Mat rotatedColorImg;
-        //     cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
-
-        //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-        //     QString filename = QString("detected_%1_objects_%2.png")
-        //                            .arg(significantObjects.size())
-        //                            .arg(timestamp);
-        //     QString fullPath = dir.filePath(filename);
-
-        //     cv::imwrite(fullPath.toStdString(), rotatedColorImg);
-        // }
-
-        // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
-        // Dataset oluşturmak için bu yorumu kaldır
-
-        if (!directoryPath.isEmpty()) {
-            QDir dir(directoryPath);
-            if (!dir.exists()) {
-                dir.mkpath(".");
-            }
-
-            static bool classesFileCreated = false;
-            if (!classesFileCreated) {
-                QString classesPath = dir.absoluteFilePath("classes.txt");
-                QFile classesFile(classesPath);
-                if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                    QTextStream out(&classesFile);
-                    out << "object\n";
-                    classesFile.close();
-                    qDebug() << "Created classes.txt:" << classesPath;
-                    classesFileCreated = true;
-                }
-            }
-
-            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-            QString imageFilename = QString("sonar_%1.png").arg(timestamp);
-            QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
-
-            QString imageFullPath = dir.filePath(imageFilename);
-            QString labelFullPath = dir.filePath(labelFilename);
-
-            cv::Mat rgbImg;
-            cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+        // Send detections to sonar surface
+        if (m_showDetectionsCheckbox && m_showDetectionsCheckbox->isChecked()) {
+            QList<SonarSurface::DetectedObject> detections;
             
-            cv::Mat rotatedImg;
-            cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
-            cv::imwrite(imageFullPath.toStdString(), rotatedImg);
-
-            QFile labelFile(labelFullPath);
-            if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                QTextStream out(&labelFile);
-
-                for (size_t i = 0; i < significantObjects.size(); i++) {
-                    cv::Rect bbox = std::get<0>(significantObjects[i]);
-
-                    double rotated_x = 640.0 - bbox.y - bbox.height;
-                    double rotated_y = bbox.x;
-                    double rotated_width = bbox.height;
-                    double rotated_height = bbox.width;
-
-                    double x_center = (rotated_x + rotated_width / 2.0) / 640.0;
-                    double y_center = (rotated_y + rotated_height / 2.0) / 640.0;
-                    double norm_width = rotated_width / 640.0;
-                    double norm_height = rotated_height / 640.0;
-
-                    out << "0 "
-                        << QString::number(x_center, 'f', 6) << " "
-                        << QString::number(y_center, 'f', 6) << " "
-                        << QString::number(norm_width, 'f', 6) << " "
-                        << QString::number(norm_height, 'f', 6) << "\n";
+            for (size_t i = 0; i < significantObjects.size(); i++) {
+                cv::Rect bbox = std::get<0>(significantObjects[i]);
+                double objRange = std::get<1>(significantObjects[i]);
+                
+                // bbox koordinatları ROTATE ÖNCESİ (transpose+flip+resize sonrası 640x640)
+                // Rotate 90° CW transform uygula
+                float old_centerX = bbox.x + bbox.width / 2.0f;
+                float old_centerY = bbox.y + bbox.height / 2.0f;
+                
+                // Rotate sonrası koordinatlar
+                float rotated_centerX = old_centerY;
+                float rotated_centerY = 640.0f - old_centerX;
+                
+                // X ekseni = bearing (soldan sağa)
+                // Y ekseni = range (yukarıdan aşağı)
+                float normalized_x = rotated_centerX / 640.0f;
+                int bearingIndex = (int)(normalized_x * width);
+                bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
+                
+                float bearingRad = 0.0f;
+                if (bearings) {
+                    bearingRad = bearings[bearingIndex] * 0.01f * M_PI / 180.0f;
                 }
-
-                labelFile.close();
-                qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
+                
+                // Y ekseni = mesafe
+                float distance = (rotated_centerY / 640.0f) * range;
+                
+                // Polar to Cartesian
+                float x = distance * sin(bearingRad);
+                float y = distance * cos(bearingRad);
+                
+                SonarSurface::DetectedObject obj;
+                obj.meterPos = QPointF(x, y);
+                obj.meterWidth = (bbox.height / 640.0) * range * 0.15;  // Rotate sonrası width/height swap
+                obj.meterHeight = (bbox.width / 640.0) * range * 0.15;
+                obj.confidence = 1.0f;
+                
+                detections.append(obj);
             }
+            
+            m_pSonarSurface->SetDetections(detections);
+            m_fanDisplay.update();
         }
 
-        // ========== DATASET OLUŞTURMA SONU ==========
+        if(m_showDetectionsCheckbox && m_showDetectionsCheckbox->isChecked())
+        {
+            // if (!directoryPath.isEmpty()) {
+            //     QDir dir(directoryPath);
+            //     if (!dir.exists()) {
+            //         dir.mkpath(".");
+            //     }
+
+            //     cv::Mat colorImg;
+            //     cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
+
+            //     for (size_t i = 0; i < significantObjects.size(); i++) {
+            //         cv::Rect bbox = std::get<0>(significantObjects[i]);
+            //         int area = bbox.width * bbox.height;
+            //         cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
+
+            //         QString label = QString("%1: %2x%3=%4")
+            //                             .arg(i+1)
+            //                             .arg(bbox.width)
+            //                             .arg(bbox.height)
+            //                             .arg(area);
+
+            //         cv::putText(colorImg, label.toStdString(),
+            //                     cv::Point(bbox.x, bbox.y - 5),
+            //                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
+            //                     cv::Scalar(0, 255, 0), 2);
+            //     }
+
+            //     cv::Mat rotatedColorImg;
+            //     cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
+
+            //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+            //     QString filename = QString("detected_%1_objects_%2.png")
+            //                            .arg(significantObjects.size())
+            //                            .arg(timestamp);
+            //     QString fullPath = dir.filePath(filename);
+
+            //     cv::imwrite(fullPath.toStdString(), rotatedColorImg);
+            // }
+
+            // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
+            // Dataset oluşturmak için bu yorumu kaldır
+
+            if (!directoryPath.isEmpty()) {
+                QDir dir(directoryPath);
+                if (!dir.exists()) {
+                    dir.mkpath(".");
+                }
+
+                static bool classesFileCreated = false;
+                if (!classesFileCreated) {
+                    QString classesPath = dir.absoluteFilePath("classes.txt");
+                    QFile classesFile(classesPath);
+                    if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                        QTextStream out(&classesFile);
+                        out << "object\n";
+                        classesFile.close();
+                        qDebug() << "Created classes.txt:" << classesPath;
+                        classesFileCreated = true;
+                    }
+                }
+
+                QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+                QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+                QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+
+                QString imageFullPath = dir.filePath(imageFilename);
+                QString labelFullPath = dir.filePath(labelFilename);
+
+                cv::Mat rgbImg;
+                cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+
+                cv::Mat rotatedImg;
+                cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
+                cv::imwrite(imageFullPath.toStdString(), rotatedImg);
+
+                QFile labelFile(labelFullPath);
+                if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    QTextStream out(&labelFile);
+
+                    for (size_t i = 0; i < significantObjects.size(); i++) {
+                        cv::Rect bbox = std::get<0>(significantObjects[i]);
+
+                        double rotated_x = 640.0 - bbox.y - bbox.height;
+                        double rotated_y = bbox.x;
+                        double rotated_width = bbox.height;
+                        double rotated_height = bbox.width;
+
+                        double x_center = (rotated_x + rotated_width / 2.0) / 640.0;
+                        double y_center = (rotated_y + rotated_height / 2.0) / 640.0;
+                        double norm_width = rotated_width / 640.0;
+                        double norm_height = rotated_height / 640.0;
+
+                        out << "0 "
+                            << QString::number(x_center, 'f', 6) << " "
+                            << QString::number(y_center, 'f', 6) << " "
+                            << QString::number(norm_width, 'f', 6) << " "
+                            << QString::number(norm_height, 'f', 6) << "\n";
+                    }
+
+                    labelFile.close();
+                    qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
+                }
+            }
+        }
+    }
+}
+
+
+void MainView::OnDetectionParamsChanged(const DetectionParameters& params)
+{
+    m_detectionParams = params;
+}
+
+void MainView::OnShowDetectionsToggled(bool checked)
+{
+    if (m_pSonarSurface) {
+        m_pSonarSurface->m_showDetections = checked;
+        m_fanDisplay.update();
     }
 }

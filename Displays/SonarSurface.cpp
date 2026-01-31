@@ -65,6 +65,7 @@ SonarSurface::SonarSurface()
     m_wasInsideFan = false;
 
     m_showGrid = true;
+    m_showDetections = false;
 
 }
 
@@ -113,7 +114,9 @@ void SonarSurface::Render()
         RenderBranding();
 
         // Render YOLO detections
-        RenderDetections();
+        if (m_showDetections) {
+            RenderDetections();
+        }
     }
 
     if ((m_measuring) || ((!m_measuring) && (m_showLastMeasurement)))

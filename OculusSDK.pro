@@ -40,6 +40,7 @@ unix {
 }
 
 SOURCES += main.cpp\
+    DetectionParams.cpp \
     Oculus/OsClientCtrl.cpp \
     Oculus/OsStatusRx.cpp \
     RmUtil/RmUtil.cpp \
@@ -72,6 +73,7 @@ SOURCES += main.cpp\
     inference.cpp
 
 HEADERS  += \
+    DetectionParams.h \
     Oculus/Oculus.h \
     Oculus/OsClientCtrl.h \
     Oculus/OsStatusRx.h \

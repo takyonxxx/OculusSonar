@@ -36,6 +36,7 @@
 // YOLO Detection (ONNX Runtime) - Direkt MainView'de
 // ============================================================================
 #include "inference.h"
+#include "DetectionParams.h"
 #include <opencv2/opencv.hpp>
 
 // forward definition for the sonar surface
@@ -214,6 +215,9 @@ private slots:
     void ToggleHexViewer();
     void OnClearHexViewer();
     void OnYoloCheckboxToggled(bool checked);
+    void OnDetectionParamsChanged(const DetectionParameters& params);
+    void OnShowDetectionsToggled(bool checked);
+
 
 private:
     void CreateHexViewer();
@@ -238,6 +242,12 @@ private:
 
     // YOLO Detection UI
     QCheckBox* m_yoloCheckbox;
+
+    DetectionParamsWidget* m_detectionParamsWidget;
+    DetectionParameters m_detectionParams;
+    QCheckBox* m_showDetectionsCheckbox;
+
+    
 
     // ============================================================================
     // YOLO Detection (Direkt MainView'de)

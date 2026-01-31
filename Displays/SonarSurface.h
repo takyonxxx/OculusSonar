@@ -138,6 +138,8 @@ public:
 
     RmGlTextBuffer m_measureText;
 
+    bool m_showDetections;
+
 signals:
 
     void MouseInfo(float dist, float angle, float x, float y);
