@@ -2078,7 +2078,7 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     cv::threshold(finalImg, brightMask, highThreshold, 255, cv::THRESH_BINARY);
 
     // Koyu nesneler için (mean'in altı)
-    double lowThreshold = mean[0] - 1.5 * stddev[0];
+    double lowThreshold = mean[0] - 2.5 * stddev[0];
     cv::Mat darkMask;
     cv::threshold(finalImg, darkMask, lowThreshold, 255, cv::THRESH_BINARY_INV);
 
@@ -2093,17 +2093,17 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(anomalyMask.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    int minBlobArea = 400;
+    int minBlobArea = 300;
     int maxBlobArea = 20000;
     int minWidth = 20;
     int minHeight = 20;
     int maxWidth = 250;
     int maxHeight = 250;
-    double minIntensityDiff = 20.0;  // Mean'den minimum fark (parlak veya koyu)
+    double minIntensityDiff = 12.0;  // Mean'den minimum fark (parlak veya koyu)
     double minAspectRatio = 0.3;
     double maxAspectRatio = 3.0;
-    double minSolidity = 0.3;
-    double minCompactness = 0.2;
+    double minSolidity = 0.25;
+    double minCompactness = 0.15;
 
     //minSolidity
     // 1.0 = tamamen dolu (kare, daire)
@@ -2188,111 +2188,108 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                             .arg(objRange, 0, 'f', 1);
         }
 
-        // if (!directoryPath.isEmpty()) {
-        //     QDir dir(directoryPath);
-        //     if (!dir.exists()) {
-        //         dir.mkpath(".");
-        //     }
-
-        //     cv::Mat colorImg;
-        //     cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
-
-        //     for (size_t i = 0; i < significantObjects.size(); i++) {
-        //         cv::Rect bbox = std::get<0>(significantObjects[i]);
-        //         int area = bbox.width * bbox.height;
-        //         cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
-
-        //         QString label = QString("%1: %2x%3=%4")
-        //                             .arg(i+1)
-        //                             .arg(bbox.width)
-        //                             .arg(bbox.height)
-        //                             .arg(area);
-
-        //         cv::putText(colorImg, label.toStdString(),
-        //                     cv::Point(bbox.x, bbox.y - 5),
-        //                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
-        //                     cv::Scalar(0, 255, 0), 2);
-        //     }
-
-        //     cv::Mat rotatedColorImg;
-        //     cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
-
-        //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-        //     QString filename = QString("detected_%1_objects_%2.png")
-        //                            .arg(significantObjects.size())
-        //                            .arg(timestamp);
-        //     QString fullPath = dir.filePath(filename);
-
-        //     cv::imwrite(fullPath.toStdString(), rotatedColorImg);
-        // }
-
-        // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
-        // Dataset oluşturmak için bu yorumu kaldır
-
         if (!directoryPath.isEmpty()) {
             QDir dir(directoryPath);
             if (!dir.exists()) {
                 dir.mkpath(".");
             }
 
-            static bool classesFileCreated = false;
-            if (!classesFileCreated) {
-                QString classesPath = dir.absoluteFilePath("classes.txt");
-                QFile classesFile(classesPath);
-                if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                    QTextStream out(&classesFile);
-                    out << "object\n";
-                    classesFile.close();
-                    qDebug() << "Created classes.txt:" << classesPath;
-                    classesFileCreated = true;
-                }
+            cv::Mat colorImg;
+            cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
+
+            for (size_t i = 0; i < significantObjects.size(); i++) {
+                cv::Rect bbox = std::get<0>(significantObjects[i]);
+                int area = bbox.width * bbox.height;
+                cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
+
+                QString label = QString("%1: %2x%3=%4")
+                                    .arg(i+1)
+                                    .arg(bbox.width)
+                                    .arg(bbox.height)
+                                    .arg(area);
+
+                cv::putText(colorImg, label.toStdString(),
+                            cv::Point(bbox.x, bbox.y - 5),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                            cv::Scalar(0, 255, 0), 2);
             }
+
+            cv::Mat rotatedColorImg;
+            cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
 
             QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-            QString imageFilename = QString("sonar_%1.png").arg(timestamp);
-            QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+            QString filename = QString("detected_%1_objects_%2.png")
+                                   .arg(significantObjects.size())
+                                   .arg(timestamp);
+            QString fullPath = dir.filePath(filename);
 
-            QString imageFullPath = dir.filePath(imageFilename);
-            QString labelFullPath = dir.filePath(labelFilename);
-
-            cv::Mat rgbImg;
-            cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
-            
-            cv::Mat rotatedImg;
-            cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
-            cv::imwrite(imageFullPath.toStdString(), rotatedImg);
-
-            QFile labelFile(labelFullPath);
-            if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                QTextStream out(&labelFile);
-
-                for (size_t i = 0; i < significantObjects.size(); i++) {
-                    cv::Rect bbox = std::get<0>(significantObjects[i]);
-
-                    double img_width = 640.0;
-                    double img_height = 640.0;
-
-                    double rotated_x = bbox.y;
-                    double rotated_y = img_width - (bbox.x + bbox.width);
-                    double rotated_width = bbox.height;
-                    double rotated_height = bbox.width;
-
-                    double x_center = (rotated_x + rotated_width / 2.0) / img_width;
-                    double y_center = (rotated_y + rotated_height / 2.0) / img_height;
-                    double norm_width = rotated_width / img_width;
-                    double norm_height = rotated_height / img_height;
-
-                    out << "0 "
-                        << QString::number(x_center, 'f', 6) << " "
-                        << QString::number(y_center, 'f', 6) << " "
-                        << QString::number(norm_width, 'f', 6) << " "
-                        << QString::number(norm_height, 'f', 6) << "\n";
-                }
-
-                labelFile.close();
-                qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
-            }
+            cv::imwrite(fullPath.toStdString(), rotatedColorImg);
         }
+
+        // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
+        // Dataset oluşturmak için bu yorumu kaldır
+
+        // if (!directoryPath.isEmpty()) {
+        //     QDir dir(directoryPath);
+        //     if (!dir.exists()) {
+        //         dir.mkpath(".");
+        //     }
+
+        //     static bool classesFileCreated = false;
+        //     if (!classesFileCreated) {
+        //         QString classesPath = dir.absoluteFilePath("classes.txt");
+        //         QFile classesFile(classesPath);
+        //         if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        //             QTextStream out(&classesFile);
+        //             out << "object\n";
+        //             classesFile.close();
+        //             qDebug() << "Created classes.txt:" << classesPath;
+        //             classesFileCreated = true;
+        //         }
+        //     }
+
+        //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+        //     QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+        //     QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+
+        //     QString imageFullPath = dir.filePath(imageFilename);
+        //     QString labelFullPath = dir.filePath(labelFilename);
+
+        //     cv::Mat rgbImg;
+        //     cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+            
+        //     cv::Mat rotatedImg;
+        //     cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
+        //     cv::imwrite(imageFullPath.toStdString(), rotatedImg);
+
+        //     QFile labelFile(labelFullPath);
+        //     if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        //         QTextStream out(&labelFile);
+
+        //         for (size_t i = 0; i < significantObjects.size(); i++) {
+        //             cv::Rect bbox = std::get<0>(significantObjects[i]);
+
+        //             double rotated_x = 640.0 - bbox.y - bbox.height;
+        //             double rotated_y = bbox.x;
+        //             double rotated_width = bbox.height;
+        //             double rotated_height = bbox.width;
+
+        //             double x_center = (rotated_x + rotated_width / 2.0) / 640.0;
+        //             double y_center = (rotated_y + rotated_height / 2.0) / 640.0;
+        //             double norm_width = rotated_width / 640.0;
+        //             double norm_height = rotated_height / 640.0;
+
+        //             out << "0 "
+        //                 << QString::number(x_center, 'f', 6) << " "
+        //                 << QString::number(y_center, 'f', 6) << " "
+        //                 << QString::number(norm_width, 'f', 6) << " "
+        //                 << QString::number(norm_height, 'f', 6) << "\n";
+        //         }
+
+        //         labelFile.close();
+        //         qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
+        //     }
+        // }
 
         // ========== DATASET OLUŞTURMA SONU ==========
 
