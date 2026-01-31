@@ -778,27 +778,36 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         // YOLO OBJECT DETECTION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
             try {
-                // Transform: Transpose + Flip + Resize + RGB (Dataset ile AYNI!)
+                // ========== AYNI TRANSFORM - Dataset ile aynı! ==========
+                // 1. Ham sonar görüntüsünü oluştur
                 cv::Mat sonarImage(height, width, CV_8UC1, pEntry->m_pImage);
-                
+
+                // 2. Transpose + Flip (Dataset ile aynı)
                 cv::Mat transformedImg;
                 cv::transpose(sonarImage, transformedImg);
                 cv::flip(transformedImg, transformedImg, 1);
-                
+
+                // 3. 640x640 resize (Dataset ile aynı)
                 cv::Mat resizedImg;
                 cv::resize(transformedImg, resizedImg, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
                 
                 cv::Mat rgbImg;
                 cv::cvtColor(resizedImg, rgbImg, cv::COLOR_GRAY2RGB);
                 
+                cv::Mat rotatedImg;
+                cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
+                
                 static int frameCount = 0;
                 if (frameCount < 5) {
-                    cv::imwrite("/tmp/yolo_input_" + std::to_string(frameCount) + ".png", rgbImg);
+                    cv::imwrite("/tmp/yolo_input_" + std::to_string(frameCount) + ".png", rotatedImg);
                     frameCount++;
                 }
-                
+
+                // ========== TRANSFORM SONU ==========
+
+                // 4. YOLO inference (şimdi doğru formatta!)
                 std::vector<DL_RESULT> results;
-                m_yoloDetector->RunSession(rgbImg, results);
+                m_yoloDetector->RunSession(rotatedImg, results);
 
                 if (!results.empty()) {
                     std::sort(results.begin(), results.end(),
@@ -808,29 +817,52 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
 
                     int maxDetections = 10;
                     int numToShow = std::min((int)results.size(), maxDetections);
+
                     QList<SonarSurface::DetectedObject> detections;
 
                     for (int i = 0; i < numToShow; i++) {
                         const auto& det = results[i];
 
+                        // ========== KOORDİNAT DÖNÜŞÜMLERİ ==========
+                        // YOLO 640x640 transform edilmiş görüntüde tespit etti
+                        // Şimdi gerçek sonar koordinatlarına dönüştürmeliyiz
+
+                        // YOLO sonuçları 640x640 üzerinde
                         float yolo_centerX = det.box.x + det.box.width / 2.0f;
                         float yolo_centerY = det.box.y + det.box.height / 2.0f;
 
+                        // 640x640'tan orijinal transform edilmiş koordinatlara
+                        // (transform edilmiş görüntü zaten 640x640, değişiklik yok)
+
+                        // Transform edilmiş görüntüde Y ekseni = mesafe (0=yakın, 640=uzak)
                         float distance = (yolo_centerY / 640.0f) * range;
-                        
-                        float normalized_x = yolo_centerX / 640.0f;
+
+                        // Transform edilmiş görüntüde X ekseni = bearing
+                        // Ters transform: 640x640 → 1992x256 koordinatına geri dön
+                        // Rotation 90 derece sağa olduğu için:
+                        // Original X = transformed Y
+                        // Original Y = 640 - transformed X
+
+                        float original_y = yolo_centerX;  // Rotasyon sonrası
+                        float original_x = 640.0f - (yolo_centerY + det.box.height);  // Ters rotasyon
+
+                        // Bearing hesapla (orijinal width=1992 üzerinden)
+                        float normalized_x = original_y / 640.0f;  // 0-1 arası
                         int bearingIndex = (int)(normalized_x * width);
                         bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
-                        
+
+                        // Bearing açısını al
                         float bearingRad = 0.0f;
                         if (pEntry->m_pBrgs) {
                             bearingRad = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
                         }
 
+                        // Polar to Cartesian
                         float x = distance * sin(bearingRad);
                         float y = distance * cos(bearingRad);
 
-                        float objectWidthMeters = (det.box.width / 640.0f) * range * 0.15f;
+                        // Nesne boyutları
+                        float objectWidthMeters = (det.box.width / 640.0f) * range * 0.2f;
                         float objectHeightMeters = (det.box.height / 640.0f) * range * 0.15f;
 
                         SonarSurface::DetectedObject obj;
@@ -838,6 +870,7 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                         obj.meterWidth = objectWidthMeters;
                         obj.meterHeight = objectHeightMeters;
                         obj.confidence = det.confidence;
+
                         detections.append(obj);
                     }
 
@@ -2155,101 +2188,114 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                             .arg(objRange, 0, 'f', 1);
         }
 
-        if (!directoryPath.isEmpty()) {
-            QDir dir(directoryPath);
-            if (!dir.exists()) {
-                dir.mkpath(".");
-            }
-
-            cv::Mat colorImg;
-            cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
-
-            for (size_t i = 0; i < significantObjects.size(); i++) {
-                cv::Rect bbox = std::get<0>(significantObjects[i]);
-                int area = bbox.width * bbox.height;
-                cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
-
-                QString label = QString("%1: %2x%3=%4")
-                                    .arg(i+1)
-                                    .arg(bbox.width)
-                                    .arg(bbox.height)
-                                    .arg(area);
-
-                cv::putText(colorImg, label.toStdString(),
-                            cv::Point(bbox.x, bbox.y - 5),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                            cv::Scalar(0, 255, 0), 2);
-            }
-
-            cv::Mat rotatedColorImg;
-            cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
-
-            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-            QString filename = QString("detected_%1_objects_%2.png")
-                                   .arg(significantObjects.size())
-                                   .arg(timestamp);
-            QString fullPath = dir.filePath(filename);
-
-            cv::imwrite(fullPath.toStdString(), rotatedColorImg);
-        }
-
-        // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
-        // Dataset oluşturmak için bu yorumu kaldır
-
         // if (!directoryPath.isEmpty()) {
         //     QDir dir(directoryPath);
         //     if (!dir.exists()) {
         //         dir.mkpath(".");
         //     }
 
-        //     static bool classesFileCreated = false;
-        //     if (!classesFileCreated) {
-        //         QString classesPath = dir.absoluteFilePath("classes.txt");
-        //         QFile classesFile(classesPath);
-        //         if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        //             QTextStream out(&classesFile);
-        //             out << "object\n";
-        //             classesFile.close();
-        //             qDebug() << "Created classes.txt:" << classesPath;
-        //             classesFileCreated = true;
-        //         }
+        //     cv::Mat colorImg;
+        //     cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
+
+        //     for (size_t i = 0; i < significantObjects.size(); i++) {
+        //         cv::Rect bbox = std::get<0>(significantObjects[i]);
+        //         int area = bbox.width * bbox.height;
+        //         cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
+
+        //         QString label = QString("%1: %2x%3=%4")
+        //                             .arg(i+1)
+        //                             .arg(bbox.width)
+        //                             .arg(bbox.height)
+        //                             .arg(area);
+
+        //         cv::putText(colorImg, label.toStdString(),
+        //                     cv::Point(bbox.x, bbox.y - 5),
+        //                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
+        //                     cv::Scalar(0, 255, 0), 2);
         //     }
+
+        //     cv::Mat rotatedColorImg;
+        //     cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
 
         //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-        //     QString imageFilename = QString("sonar_%1.png").arg(timestamp);
-        //     QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+        //     QString filename = QString("detected_%1_objects_%2.png")
+        //                            .arg(significantObjects.size())
+        //                            .arg(timestamp);
+        //     QString fullPath = dir.filePath(filename);
 
-        //     QString imageFullPath = dir.filePath(imageFilename);
-        //     QString labelFullPath = dir.filePath(labelFilename);
-
-        //     cv::Mat rgbImg;
-        //     cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
-        //     cv::imwrite(imageFullPath.toStdString(), rgbImg);
-
-        //     QFile labelFile(labelFullPath);
-        //     if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        //         QTextStream out(&labelFile);
-
-        //         for (size_t i = 0; i < significantObjects.size(); i++) {
-        //             cv::Rect bbox = std::get<0>(significantObjects[i]);
-
-        //             double x_center = (bbox.x + bbox.width / 2.0) / 640.0;
-        //             double y_center = (bbox.y + bbox.height / 2.0) / 640.0;
-        //             double norm_width = bbox.width / 640.0;
-        //             double norm_height = bbox.height / 640.0;
-
-        //             out << "0 "
-        //                 << QString::number(x_center, 'f', 6) << " "
-        //                 << QString::number(y_center, 'f', 6) << " "
-        //                 << QString::number(norm_width, 'f', 6) << " "
-        //                 << QString::number(norm_height, 'f', 6) << "\n";
-        //         }
-
-        //         labelFile.close();
-        //         qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
-        //     }
+        //     cv::imwrite(fullPath.toStdString(), rotatedColorImg);
         // }
 
+        // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
+        // Dataset oluşturmak için bu yorumu kaldır
+
+        if (!directoryPath.isEmpty()) {
+            QDir dir(directoryPath);
+            if (!dir.exists()) {
+                dir.mkpath(".");
+            }
+
+            static bool classesFileCreated = false;
+            if (!classesFileCreated) {
+                QString classesPath = dir.absoluteFilePath("classes.txt");
+                QFile classesFile(classesPath);
+                if (classesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    QTextStream out(&classesFile);
+                    out << "object\n";
+                    classesFile.close();
+                    qDebug() << "Created classes.txt:" << classesPath;
+                    classesFileCreated = true;
+                }
+            }
+
+            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+            QString imageFilename = QString("sonar_%1.png").arg(timestamp);
+            QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
+
+            QString imageFullPath = dir.filePath(imageFilename);
+            QString labelFullPath = dir.filePath(labelFilename);
+
+            cv::Mat rgbImg;
+            cv::cvtColor(finalImg, rgbImg, cv::COLOR_GRAY2RGB);
+            
+            cv::Mat rotatedImg;
+            cv::rotate(rgbImg, rotatedImg, cv::ROTATE_90_CLOCKWISE);
+            cv::imwrite(imageFullPath.toStdString(), rotatedImg);
+
+            QFile labelFile(labelFullPath);
+            if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&labelFile);
+
+                for (size_t i = 0; i < significantObjects.size(); i++) {
+                    cv::Rect bbox = std::get<0>(significantObjects[i]);
+
+                    double img_width = 640.0;
+                    double img_height = 640.0;
+
+                    double rotated_x = bbox.y;
+                    double rotated_y = img_width - (bbox.x + bbox.width);
+                    double rotated_width = bbox.height;
+                    double rotated_height = bbox.width;
+
+                    double x_center = (rotated_x + rotated_width / 2.0) / img_width;
+                    double y_center = (rotated_y + rotated_height / 2.0) / img_height;
+                    double norm_width = rotated_width / img_width;
+                    double norm_height = rotated_height / img_height;
+
+                    out << "0 "
+                        << QString::number(x_center, 'f', 6) << " "
+                        << QString::number(y_center, 'f', 6) << " "
+                        << QString::number(norm_width, 'f', 6) << " "
+                        << QString::number(norm_height, 'f', 6) << "\n";
+                }
+
+                labelFile.close();
+                qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
+            }
+        }
+
         // ========== DATASET OLUŞTURMA SONU ==========
+
+        qDebug() << "";
     }
 }
