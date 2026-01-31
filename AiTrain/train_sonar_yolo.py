@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 SONAR YOLO TRAINING - Windows/Linux
-ONNX export with opset 20 (max supported by PyTorch)
+Dataset format: classes.txt + sonar_*.png + sonar_*.txt
+ONNX export with opset 17 (max compatibility)
 CUDA/GPU support with automatic detection
 """
 
@@ -36,7 +37,7 @@ def main():
         print(f"  GPU: {gpu_name}")
         print(f"  VRAM: {gpu_memory:.1f} GB")
         print(f"  CUDA Version: {torch.version.cuda}")
-        
+
         if gpu_memory >= 8:
             batch_size = 16
         elif gpu_memory >= 6:
@@ -53,10 +54,10 @@ def main():
         print("✗ CUDA bulunamadı, CPU kullanılacak")
 
     # 3. ZIP DOSYASINI AÇ
-    zip_file = script_dir / "sonar_model.zip"
+    zip_file = script_dir / "sonar_dataset.zip"
     if not zip_file.exists():
         print(f"\n✗ HATA: {zip_file} bulunamadı!")
-        print(f"\nsonar_model.zip'i bu klasöre kopyala:")
+        print(f"\nsonar_dataset.zip'i bu klasöre kopyala:")
         print(f"  {script_dir}")
         return
 
@@ -72,7 +73,55 @@ def main():
         zip_ref.extractall(extract_dir)
     print(f"✓ Dataset açıldı: {extract_dir}")
 
-    # 4. YOLO DATASET YAPISI OLUŞTUR
+    # 4. CLASSES.TXT KONTROLÜ VE OKUMA
+    print("\n" + "=" * 60)
+    print("DATASET YAPISI KONTROL EDİLİYOR")
+    print("=" * 60)
+
+    classes_file = extract_dir / "classes.txt"
+    if not classes_file.exists():
+        print(f"\n✗ HATA: classes.txt bulunamadı!")
+        print(f"  Beklenen konum: {classes_file}")
+        return
+
+    # classes.txt'yi oku
+    with open(classes_file, 'r') as f:
+        class_names = [line.strip() for line in f.readlines() if line.strip()]
+
+    print(f"\n✓ classes.txt bulundu")
+    print(f"  Sınıf sayısı: {len(class_names)}")
+    print(f"  Sınıflar: {class_names}")
+
+    # 5. GÖRÜNTÜ VE ETİKET DOSYALARINI BUL
+    images = sorted(list(extract_dir.glob("*.png")))
+    labels = sorted(list(extract_dir.glob("*.txt")))
+
+    # classes.txt'yi filtrele
+    labels = [l for l in labels if l.name != "classes.txt"]
+
+    print(f"\n✓ Görüntüler bulundu: {len(images)}")
+    print(f"✓ Etiketler bulundu: {len(labels)}")
+
+    if len(images) == 0:
+        print("\n✗ HATA: Görüntü bulunamadı!")
+        print("  ZIP içinde sonar_*.png dosyaları olmalı")
+        return
+
+    # Eşleşmeyen dosyaları kontrol et
+    image_stems = {img.stem for img in images}
+    label_stems = {lbl.stem for lbl in labels}
+
+    missing_labels = image_stems - label_stems
+    if missing_labels:
+        print(f"\n⚠ Uyarı: {len(missing_labels)} görüntünün etiketi yok")
+        if len(missing_labels) <= 5:
+            print(f"  Örnekler: {list(missing_labels)[:5]}")
+
+    # 6. YOLO DATASET YAPISI OLUŞTUR
+    print("\n" + "=" * 60)
+    print("YOLO DATASET YAPISI OLUŞTURULUYOR")
+    print("=" * 60)
+
     yolo_dir = script_dir / "yolo_dataset"
     if yolo_dir.exists():
         shutil.rmtree(yolo_dir)
@@ -82,54 +131,51 @@ def main():
     (yolo_dir / "val" / "images").mkdir(parents=True)
     (yolo_dir / "val" / "labels").mkdir(parents=True)
 
-    # 5. GÖRÜNTÜLERİ KOPYALA
+    # 7. GÖRÜNTÜLERI KOPYALA - %80 train, %20 val
     print("\nGörüntüler kopyalanıyor...")
-
-    images = sorted(list((extract_dir / "obj_Train_data").glob("*.png")))
-    print(f"Toplam: {len(images)} görüntü")
-
-    if len(images) == 0:
-        print("✗ HATA: Görüntü bulunamadı!")
-        return
 
     split_idx = int(len(images) * 0.8)
     train_images = images[:split_idx]
     val_images = images[split_idx:]
 
-    print(f"Train: {len(train_images)} görüntü")
-    print(f"Val: {len(val_images)} görüntü")
+    print(f"  Train: {len(train_images)} görüntü")
+    print(f"  Val: {len(val_images)} görüntü")
 
+    # Train set
     for img in train_images:
         shutil.copy(img, yolo_dir / "train" / "images" / img.name)
         label = img.with_suffix('.txt')
-        if label.exists():
+        if label.exists() and label.name != "classes.txt":
             shutil.copy(label, yolo_dir / "train" / "labels" / label.name)
 
+    # Validation set
     for img in val_images:
         shutil.copy(img, yolo_dir / "val" / "images" / img.name)
         label = img.with_suffix('.txt')
-        if label.exists():
+        if label.exists() and label.name != "classes.txt":
             shutil.copy(label, yolo_dir / "val" / "labels" / label.name)
 
     print("✓ Dosyalar kopyalandı")
 
-    # 6. DATA.YAML
+    # 8. DATA.YAML
     print("\ndata.yaml oluşturuluyor...")
 
     data_yaml = {
         'path': str(yolo_dir.absolute()),
         'train': 'train/images',
         'val': 'val/images',
-        'nc': 1,
-        'names': ['Object']
+        'nc': len(class_names),
+        'names': class_names
     }
 
     with open(yolo_dir / "data.yaml", 'w') as f:
         yaml.dump(data_yaml, f)
 
     print(f"✓ data.yaml: {yolo_dir / 'data.yaml'}")
+    print(f"  Sınıf sayısı: {len(class_names)}")
+    print(f"  Sınıflar: {class_names}")
 
-    # 7. ULTRALYTICS
+    # 9. ULTRALYTICS
     print("\n" + "=" * 60)
     print("YOLOv8 KURULUMU")
     print("=" * 60)
@@ -144,13 +190,13 @@ def main():
         from ultralytics import YOLO
         print("✓ Kurulum tamamlandı")
 
-    # 8. ESKİ RUNS KLASÖRÜNÜ TEMİZLE
+    # 10. ESKİ RUNS KLASÖRÜNÜ TEMİZLE
     runs_dir = script_dir / "runs"
     if runs_dir.exists():
         shutil.rmtree(runs_dir)
         print("✓ Eski runs klasörü temizlendi")
 
-    # 9. TRAINING
+    # 11. TRAINING
     print("\n" + "=" * 60)
     print("MODEL EĞİTİMİ BAŞLIYOR")
     print("=" * 60)
@@ -158,6 +204,8 @@ def main():
     device_str = f"GPU ({gpu_name})" if device == 0 else "CPU"
     print(f"\nCihaz: {device_str}")
     print(f"Batch size: {batch_size}")
+    print(f"Görüntü boyutu: 640x640")
+    print(f"Epoch: 150")
 
     if device == 0:
         print("Tahmini süre: 10-30 dakika (GPU)")
@@ -182,13 +230,15 @@ def main():
         device=device,
         workers=workers,
         exist_ok=True,
-        
+
+        # Optimizer settings
         optimizer='Adam',
         lr0=0.001,
         lrf=0.01,
         momentum=0.937,
         weight_decay=0.0005,
-        
+
+        # Augmentation settings
         hsv_h=0.015,
         hsv_s=0.3,
         hsv_v=0.2,
@@ -201,14 +251,15 @@ def main():
         fliplr=0.5,
         mosaic=1.0,
         mixup=0.1,
-        
+
+        # Training settings
         verbose=True,
         plots=True,
         save_period=10,
         amp=(device == 0),
     )
 
-    # 10. ONNX EXPORT - OPSET 17 (en uyumlu)
+    # 12. ONNX EXPORT - OPSET 17
     print("\n" + "=" * 60)
     print("ONNX EXPORT - OPSET 17")
     print("=" * 60)
@@ -218,41 +269,43 @@ def main():
     for pt_file in (script_dir / "runs").rglob("best.pt"):
         best_pt = pt_file
         break
-    
+
     onnx_exported = False
 
     if best_pt and best_pt.exists():
         print(f"\n✓ Best model bulundu: {best_pt}")
-        
+
         model = YOLO(str(best_pt))
-        
+
         # OPSET 17 - PyTorch ve ONNX Runtime ile en uyumlu versiyon
         onnx_path = model.export(
             format='onnx',
             imgsz=640,
             simplify=True,
-            opset=17,        # 21 yerine 17 (en uyumlu)
+            opset=17,
             dynamic=False
         )
-        
+
         print(f"✓ ONNX export: {onnx_path}")
-        
+
         output = script_dir / "sonar_model.onnx"
         shutil.copy(onnx_path, output)
         print(f"✓ Kaydedildi: {output}")
         onnx_exported = True
-        
+
         try:
             import onnx
             model_onnx = onnx.load(str(output))
             print(f"\n=== ONNX Model Info ===")
             print(f"Opset version: {model_onnx.opset_import[0].version}")
+            print(f"Input shape: 640x640")
+            print(f"Classes: {len(class_names)} ({', '.join(class_names)})")
         except:
             pass
     else:
         print("\n✗ best.pt bulunamadı!")
 
-    # 11. TEMİZLİK
+    # 13. TEMİZLİK
     print("\n" + "=" * 60)
     print("TEMİZLİK YAPILIYOR")
     print("=" * 60)
@@ -283,16 +336,22 @@ def main():
             except Exception as e:
                 print(f"✗ Silinemedi: {file_path.name} - {e}")
 
-    # 12. ÖZET
+    # 14. ÖZET
     print("\n" + "=" * 60)
-    print("TRAİNİNG TAMAMLANDI!")
+    print("TRAINING TAMAMLANDI!")
     print("=" * 60)
 
     if onnx_exported:
         print(f"\n✓ sonar_model.onnx hazır!")
+        print(f"\nModel Özellikleri:")
+        print(f"  Format: ONNX (opset 17)")
+        print(f"  Input: 640x640 RGB")
+        print(f"  Classes: {len(class_names)} ({', '.join(class_names)})")
         print(f"\nSONRAKİ ADIMLAR:")
         print(f"  1. sonar_model.onnx'i uygulama dizinine kopyala")
         print(f"  2. Uygulamayı çalıştır ve test et!")
+        print(f"  3. Inference'da AYNI transform'u uygula:")
+        print(f"     - Transpose + Flip + Resize(640x640)")
     else:
         print(f"\n✗ ONNX export başarısız!")
 

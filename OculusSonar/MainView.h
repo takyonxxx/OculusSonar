@@ -184,15 +184,10 @@ signals:
 
 public slots:
     void NewStatusMsg(OculusStatusMsg osm, quint16 valid, quint16 invalid);
-    void NewReturnFire(OsBufferEntry* pEntry);
-    void saveImageAsPng(int height, int width, uchar* image,
-                        short* bearings, double range,
-                        const QString& directoryPath);
+    void NewReturnFire(OsBufferEntry* pEntry);   
     void analyzeImage(int height, int width, uchar* image,
                                 short* bearings, double range,
                                 const QString& directoryPath);
-    void SaveRenderedSonarImage_NoGrid();
-    void SaveRenderedSonarImage();
     QColor applySonarColorMap(float intensity);
     void NewUserConfig(UserConfig config);
     void FireSonar();

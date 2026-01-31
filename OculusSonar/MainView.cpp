@@ -773,36 +773,37 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        // static qint64 lastSaveTime = 0;
-        // qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-        // if (currentTime - lastSaveTime >= 1000) {
-        //     //SaveRenderedSonarImage_NoGrid();
-        //     saveImageWithAutoLabel(height, width, pEntry->m_pImage,
-        //                            pEntry->m_pBrgs, range, sonarImageDir);
-        //     lastSaveTime = currentTime;
-        // }        
-
-        analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
+        //analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
 
         // YOLO OBJECT DETECTION - FIXED VERSION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
             try {
-                // Create OpenCV Mat from sonar image data
+                // ========== AYNI TRANSFORM - Dataset ile aynı! ==========
+                // 1. Ham sonar görüntüsünü oluştur
                 cv::Mat sonarImage(height, width, CV_8UC1, pEntry->m_pImage);
 
-                // Run YOLO detection directly (preprocessing is done inside RunSession)
-                // No need to resize here - inference.cpp handles it
+                // 2. Transpose + Flip (Dataset ile aynı)
+                cv::Mat transformedImg;
+                cv::transpose(sonarImage, transformedImg);
+                cv::flip(transformedImg, transformedImg, 1);
+
+                // 3. 640x640 resize (Dataset ile aynı)
+                cv::Mat resizedImg;
+                cv::resize(transformedImg, resizedImg, cv::Size(640, 640), 0, 0, cv::INTER_LINEAR);
+                cv::imwrite("/tmp/yolo_input.png", resizedImg);
+
+                // ========== TRANSFORM SONU ==========
+
+                // 4. YOLO inference (şimdi doğru formatta!)
                 std::vector<DL_RESULT> results;
-                m_yoloDetector->RunSession(sonarImage, results);
+                m_yoloDetector->RunSession(resizedImg, results);  // ← Artık 640x640 transform edilmiş görüntü
 
                 if (!results.empty()) {
-                    // Sort by confidence (descending)
                     std::sort(results.begin(), results.end(),
                               [](const DL_RESULT& a, const DL_RESULT& b) {
                                   return a.confidence > b.confidence;
                               });
 
-                    // Limit to top 10 detections
                     int maxDetections = 10;
                     int numToShow = std::min((int)results.size(), maxDetections);
 
@@ -811,43 +812,48 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                     for (int i = 0; i < numToShow; i++) {
                         const auto& det = results[i];
 
-                        // Calculate center of detected object in pixel coordinates
-                        float centerPixelX = det.box.x + det.box.width / 2.0f;
-                        float centerPixelY = det.box.y + det.box.height / 2.0f;
+                        // ========== KOORDİNAT DÖNÜŞÜMLERİ ==========
+                        // YOLO 640x640 transform edilmiş görüntüde tespit etti
+                        // Şimdi gerçek sonar koordinatlarına dönüştürmeliyiz
 
-                        // Validate coordinates
-                        if (centerPixelX < 0 || centerPixelX >= width) {
-                            qDebug() << "Skipping detection" << i << "- X out of bounds:" << centerPixelX;
-                            continue;
-                        }
-                        if (centerPixelY < 0 || centerPixelY >= height) {
-                            qDebug() << "Skipping detection" << i << "- Y out of bounds:" << centerPixelY;
-                            continue;
-                        }
+                        // YOLO sonuçları 640x640 üzerinde
+                        float yolo_centerX = det.box.x + det.box.width / 2.0f;
+                        float yolo_centerY = det.box.y + det.box.height / 2.0f;
 
-                        // Get bearing index from pixel X coordinate
-                        int bearingIndex = (int)(centerPixelX);
+                        // 640x640'tan orijinal transform edilmiş koordinatlara
+                        // (transform edilmiş görüntü zaten 640x640, değişiklik yok)
+
+                        // Transform edilmiş görüntüde Y ekseni = mesafe (0=yakın, 640=uzak)
+                        float distance = (yolo_centerY / 640.0f) * range;
+
+                        // Transform edilmiş görüntüde X ekseni = bearing
+                        // Ters transform: 640x640 → 1992x256 koordinatına geri dön
+                        // Rotation 90 derece sağa olduğu için:
+                        // Original X = transformed Y
+                        // Original Y = 640 - transformed X
+
+                        float original_y = yolo_centerX;  // Rotasyon sonrası
+                        float original_x = 640.0f - (yolo_centerY + det.box.height);  // Ters rotasyon
+
+                        // Bearing hesapla (orijinal width=1992 üzerinden)
+                        float normalized_x = original_y / 640.0f;  // 0-1 arası
+                        int bearingIndex = (int)(normalized_x * width);
                         bearingIndex = std::max(0, std::min(bearingIndex, width - 1));
 
-                        // Convert bearing index to radians
+                        // Bearing açısını al
                         float bearingRad = 0.0f;
                         if (pEntry->m_pBrgs) {
                             bearingRad = pEntry->m_pBrgs[bearingIndex] * 0.01f * M_PI / 180.0f;
                         }
 
-                        // Calculate distance from Y coordinate (Y=0 is near, Y=height is far)
-                        float distance = (centerPixelY / (float)height) * range;
-
-                        // Convert polar to Cartesian coordinates (sonar coordinate system)
+                        // Polar to Cartesian
                         float x = distance * sin(bearingRad);
                         float y = distance * cos(bearingRad);
 
-                        // Calculate object size in meters
-                        // Approximate: width scales with range, height is more constant
-                        float objectWidthMeters = (det.box.width / (float)width) * range * 0.2f;
-                        float objectHeightMeters = (det.box.height / (float)height) * range * 0.15f;
+                        // Nesne boyutları
+                        float objectWidthMeters = (det.box.width / 640.0f) * range * 0.2f;
+                        float objectHeightMeters = (det.box.height / 640.0f) * range * 0.15f;
 
-                        // Create detection object
                         SonarSurface::DetectedObject obj;
                         obj.meterPos = QPointF(x, y);
                         obj.meterWidth = objectWidthMeters;
@@ -857,7 +863,6 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                         detections.append(obj);
                     }
 
-                    // Update display
                     m_pSonarSurface->SetDetections(detections);
                 }
 
@@ -866,6 +871,7 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                 m_yoloEnabled = false;
             }
         }
+
 
         m_logger.LogData(rt_oculusSonar, ver, false, pEntry->m_rawSize, pEntry->m_pRaw);
         m_info.setText("Logging To: '" + m_logger.m_fileName + "' Size: " + QString::number((double)m_logger.m_loggedSize / (1024 * 1024), 'f', 1));
@@ -881,92 +887,6 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         UpdateLogFileName();
     }
 }
-
-void MainView::saveImageAsPng(int height, int width, uchar* image,
-                              short* bearings, double range,
-                              const QString& directoryPath)
-{
-    int size = 640;
-    cv::Mat cartesian = cv::Mat::zeros(size, size, CV_8UC1);
-
-    int centerX = size / 2;
-    int centerY = size;
-
-    // Polar → Cartesian
-    for (int b = 0; b < width; b++) {
-        float bearingRad = bearings[b] * 0.01f * M_PI / 180.0f;
-
-        for (int r = 0; r < height; r++) {
-            float distance = (r / (float)height) * range;
-            int x = centerX + (int)(distance * sin(bearingRad) * (size / (2.0 * range)));
-            int y = centerY - (int)(distance * cos(bearingRad) * (size / range));
-
-            if (x >= 0 && x < size && y >= 0 && y < size) {
-                uchar pixel = image[r * width + b];
-                cartesian.at<uchar>(y, x) = std::max(cartesian.at<uchar>(y, x), pixel);
-            }
-        }
-    }
-
-    // Denoising (inpainting kaldırıldı)
-    cv::Mat denoised;
-    cv::fastNlMeansDenoising(cartesian, denoised, 5, 7, 21);
-
-    // CLAHE
-    cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(2.0, cv::Size(8, 8));
-    cv::Mat enhanced;
-    clahe->apply(denoised, enhanced);
-
-    // Kaydet
-    counter++;
-    QString filename = QDir(directoryPath).absoluteFilePath(
-        QString("sonar_cartesian_%1.png").arg(counter, 5, 10, QChar('0'))
-        );
-    cv::imwrite(filename.toStdString(), enhanced);
-}
-
-void MainView::SaveRenderedSonarImage_NoGrid()
-{
-    if (!m_pSonarSurface) return;
-
-    bool gridWasEnabled = m_pSonarSurface->m_showGrid;
-    bool dwGridWasEnabled = m_pSonarSurface->m_dwGrid;
-    bool gridTextWasEnabled = m_pSonarSurface->m_dwGridText;
-
-    m_pSonarSurface->m_showGrid = false;
-    m_pSonarSurface->m_dwGrid = false;
-    m_pSonarSurface->m_dwGridText = false;
-    m_fanDisplay.update();
-    QCoreApplication::processEvents();
-
-    QImage img = m_fanDisplay.grabFramebuffer();
-
-    m_pSonarSurface->m_showGrid = gridWasEnabled;
-    m_pSonarSurface->m_dwGrid = dwGridWasEnabled;
-    m_pSonarSurface->m_dwGridText = gridTextWasEnabled;
-
-    if (!img.isNull()) {
-        m_renderCounter++;
-        QString filename = QDir(sonarImageDir).absoluteFilePath(
-            QString("sonar_clean_%1.png").arg(m_renderCounter, 5, 10, QChar('0'))
-            );
-        img.save(filename, "PNG");
-    }
-}
-
-void MainView::SaveRenderedSonarImage()
-{
-    QImage img = m_fanDisplay.grabFramebuffer();
-
-    if (!img.isNull()) {
-        m_renderCounter++;
-        QString filename = QDir(sonarImageDir).absoluteFilePath(
-            QString("sonar_grid_%1.png").arg(m_renderCounter, 5, 10, QChar('0'))
-            );
-        img.save(filename, "PNG");
-    }
-}
-
 
 // Helper function to apply sonar color mapping
 QColor MainView::applySonarColorMap(float intensity)
@@ -2140,9 +2060,20 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     cv::Scalar mean, stddev;
     cv::meanStdDev(finalImg, mean, stddev);
 
-    double threshold = mean[0] + 2.0 * stddev[0];
+    // ÇİFT EŞİK: Hem parlak hem koyu nesneler için
+    // Parlak nesneler için (mean'in üstü)
+    double highThreshold = mean[0] + 1.5 * stddev[0];
+    cv::Mat brightMask;
+    cv::threshold(finalImg, brightMask, highThreshold, 255, cv::THRESH_BINARY);
+
+    // Koyu nesneler için (mean'in altı)
+    double lowThreshold = mean[0] - 1.5 * stddev[0];
+    cv::Mat darkMask;
+    cv::threshold(finalImg, darkMask, lowThreshold, 255, cv::THRESH_BINARY_INV);
+
+    // İki mask'i birleştir
     cv::Mat anomalyMask;
-    cv::threshold(finalImg, anomalyMask, threshold, 255, cv::THRESH_BINARY);
+    cv::bitwise_or(brightMask, darkMask, anomalyMask);
 
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
     cv::morphologyEx(anomalyMask, anomalyMask, cv::MORPH_OPEN, kernel);
@@ -2151,17 +2082,17 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(anomalyMask.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    int minBlobArea = 500;
+    int minBlobArea = 400;
     int maxBlobArea = 20000;
     int minWidth = 20;
     int minHeight = 20;
     int maxWidth = 250;
     int maxHeight = 250;
-    double minIntensity = 130.0;
+    double minIntensityDiff = 20.0;  // Mean'den minimum fark (parlak veya koyu)
     double minAspectRatio = 0.3;
     double maxAspectRatio = 3.0;
-    double minSolidity = 0.4;
-     double minCompactness = 0.3;
+    double minSolidity = 0.3;
+    double minCompactness = 0.2;
 
     //minSolidity
     // 1.0 = tamamen dolu (kare, daire)
@@ -2182,7 +2113,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     for (size_t i = 0; i < contours.size(); i++) {
         cv::Rect bbox = cv::boundingRect(contours[i]);
 
-        // BOUNDING BOX ALANI ile filtrele (görseldeki alan ile aynı)
         int bboxArea = bbox.width * bbox.height;
 
         if (bboxArea < minBlobArea || bboxArea > maxBlobArea) {
@@ -2199,7 +2129,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             continue;
         }
 
-        // Gerçek contour alanı - sadece solidity ve compactness için
         double contourArea = cv::contourArea(contours[i]);
         double perimeter = cv::arcLength(contours[i], true);
         double compactness = (4.0 * 3.14159265359 * contourArea) / (perimeter * perimeter);
@@ -2211,7 +2140,9 @@ void MainView::analyzeImage(int height, int width, uchar* image,
         cv::drawContours(mask, contours, i, cv::Scalar(255), cv::FILLED);
         cv::Scalar blobMean = cv::mean(finalImg, mask);
 
-        if (blobMean[0] < minIntensity) {
+        // YENİ: Mean'den farkı kontrol et (parlak VEYA koyu olabilir)
+        double intensityDiff = std::abs(blobMean[0] - mean[0]);
+        if (intensityDiff < minIntensityDiff) {
             continue;
         }
 
@@ -2246,57 +2177,53 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                             .arg(objRange, 0, 'f', 1);
         }
 
-        // Etiketli görüntü kaydetme (2'den fazla nesne varsa)
-        if (!directoryPath.isEmpty()) {
-            QDir dir(directoryPath);
-            if (!dir.exists()) {
-                dir.mkpath(".");
-            }
+        // if (!directoryPath.isEmpty()) {
+        //     QDir dir(directoryPath);
+        //     if (!dir.exists()) {
+        //         dir.mkpath(".");
+        //     }
 
-            cv::Mat colorImg;
-            cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
+        //     cv::Mat colorImg;
+        //     cv::cvtColor(finalImg, colorImg, cv::COLOR_GRAY2BGR);
 
-            for (size_t i = 0; i < significantObjects.size(); i++) {
-                cv::Rect bbox = std::get<0>(significantObjects[i]);
-                int area = bbox.width * bbox.height;
-                cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
+        //     for (size_t i = 0; i < significantObjects.size(); i++) {
+        //         cv::Rect bbox = std::get<0>(significantObjects[i]);
+        //         int area = bbox.width * bbox.height;
+        //         cv::rectangle(colorImg, bbox, cv::Scalar(0, 255, 0), 2);
 
-                // Nesne numarası ve boyutu: "1: 25x40=1000"
-                QString label = QString("%1: %2x%3=%4")
-                                    .arg(i+1)
-                                    .arg(bbox.width)
-                                    .arg(bbox.height)
-                                    .arg(area);
+        //         QString label = QString("%1: %2x%3=%4")
+        //                             .arg(i+1)
+        //                             .arg(bbox.width)
+        //                             .arg(bbox.height)
+        //                             .arg(area);
 
-                cv::putText(colorImg, label.toStdString(),
-                            cv::Point(bbox.x, bbox.y - 5),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                            cv::Scalar(0, 255, 0), 2);
-            }
+        //         cv::putText(colorImg, label.toStdString(),
+        //                     cv::Point(bbox.x, bbox.y - 5),
+        //                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
+        //                     cv::Scalar(0, 255, 0), 2);
+        //     }
 
-            // 90 derece sağa döndür (yelpaze yukarı baksın)
-            cv::Mat rotatedColorImg;
-            cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
+        //     cv::Mat rotatedColorImg;
+        //     cv::rotate(colorImg, rotatedColorImg, cv::ROTATE_90_CLOCKWISE);
 
-            QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-            QString filename = QString("detected_%1_objects_%2.png")
-                                   .arg(significantObjects.size())
-                                   .arg(timestamp);
-            QString fullPath = dir.filePath(filename);
+        //     QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+        //     QString filename = QString("detected_%1_objects_%2.png")
+        //                            .arg(significantObjects.size())
+        //                            .arg(timestamp);
+        //     QString fullPath = dir.filePath(filename);
 
-            cv::imwrite(fullPath.toStdString(), rotatedColorImg);
-        }
+        //     cv::imwrite(fullPath.toStdString(), rotatedColorImg);
+        // }
 
         // ========== DATASET OLUŞTURMA (YOLO FORMAT) ==========
         // Dataset oluşturmak için bu yorumu kaldır
-        /*
+
         if (!directoryPath.isEmpty()) {
             QDir dir(directoryPath);
             if (!dir.exists()) {
                 dir.mkpath(".");
             }
 
-            // classes.txt dosyasını oluştur (sadece bir kez)
             static bool classesFileCreated = false;
             if (!classesFileCreated) {
                 QString classesPath = dir.absoluteFilePath("classes.txt");
@@ -2310,7 +2237,6 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                 }
             }
 
-            // Timestamp ile unique filename
             QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
             QString imageFilename = QString("sonar_%1.png").arg(timestamp);
             QString labelFilename = QString("sonar_%1.txt").arg(timestamp);
@@ -2318,12 +2244,10 @@ void MainView::analyzeImage(int height, int width, uchar* image,
             QString imageFullPath = dir.filePath(imageFilename);
             QString labelFullPath = dir.filePath(labelFilename);
 
-            // Görüntüyü 90 derece sağa döndür ve kaydet
             cv::Mat rotatedFinalImg;
             cv::rotate(finalImg, rotatedFinalImg, cv::ROTATE_90_CLOCKWISE);
             cv::imwrite(imageFullPath.toStdString(), rotatedFinalImg);
 
-            // YOLO format label dosyası oluştur
             QFile labelFile(labelFullPath);
             if (labelFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
                 QTextStream out(&labelFile);
@@ -2334,19 +2258,16 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                     double img_width = 640.0;
                     double img_height = 640.0;
 
-                    // 90 derece sağa döndürme transformasyonu
                     double rotated_x = bbox.y;
                     double rotated_y = img_width - (bbox.x + bbox.width);
                     double rotated_width = bbox.height;
                     double rotated_height = bbox.width;
 
-                    // YOLO format: normalize edilmiş koordinatlar
                     double x_center = (rotated_x + rotated_width / 2.0) / img_width;
                     double y_center = (rotated_y + rotated_height / 2.0) / img_height;
                     double norm_width = rotated_width / img_width;
                     double norm_height = rotated_height / img_height;
 
-                    // class_id = 0 (object)
                     out << "0 "
                         << QString::number(x_center, 'f', 6) << " "
                         << QString::number(y_center, 'f', 6) << " "
@@ -2358,7 +2279,7 @@ void MainView::analyzeImage(int height, int width, uchar* image,
                 qDebug() << "Dataset:" << imageFilename << "+" << labelFilename;
             }
         }
-        */
+
         // ========== DATASET OLUŞTURMA SONU ==========
 
         qDebug() << "";

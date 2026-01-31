@@ -225,3 +225,7 @@ unix {
 #python -c "import onnx; print('ONNX:', onnx.__version__)"
 
 #C:\Users\MSI\AppData\Local\Programs\Python\Python311\python.exe train_sonar_yolo.py
+
+DISTFILES += \
+    AiTrain/sonar_dataset.zip \
+    AiTrain/train_sonar_yolo.py
