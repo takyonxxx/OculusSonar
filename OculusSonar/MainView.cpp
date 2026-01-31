@@ -2073,12 +2073,12 @@ void MainView::analyzeImage(int height, int width, uchar* image,
 
     // ÇİFT EŞİK: Hem parlak hem koyu nesneler için
     // Parlak nesneler için (mean'in üstü)
-    double highThreshold = mean[0] + 1.5 * stddev[0];
+    double highThreshold = mean[0] + 2.5 * stddev[0];
     cv::Mat brightMask;
     cv::threshold(finalImg, brightMask, highThreshold, 255, cv::THRESH_BINARY);
 
     // Koyu nesneler için (mean'in altı)
-    double lowThreshold = mean[0] - 2.5 * stddev[0];
+    double lowThreshold = mean[0] - 1.0 * stddev[0];
     cv::Mat darkMask;
     cv::threshold(finalImg, darkMask, lowThreshold, 255, cv::THRESH_BINARY_INV);
 
@@ -2093,16 +2093,16 @@ void MainView::analyzeImage(int height, int width, uchar* image,
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(anomalyMask.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-    int minBlobArea = 300;
+    int minBlobArea = 400;
     int maxBlobArea = 20000;
     int minWidth = 20;
     int minHeight = 20;
     int maxWidth = 250;
     int maxHeight = 250;
-    double minIntensityDiff = 12.0;  // Mean'den minimum fark (parlak veya koyu)
+    double minIntensityDiff = 20.0;
     double minAspectRatio = 0.3;
     double maxAspectRatio = 3.0;
-    double minSolidity = 0.25;
+    double minSolidity = 0.2;
     double minCompactness = 0.15;
 
     //minSolidity
