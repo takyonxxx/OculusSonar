@@ -789,7 +789,10 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
         m_pSonarSurface->UpdateFan(range, width, pEntry->m_pBrgs, true);
         m_pSonarSurface->UpdateImg(height, width, pEntry->m_pImage);
 
-        analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
+        if (m_showDetectionsCheckbox && m_showDetectionsCheckbox->isChecked())
+        {
+            analyzeImage(height, width, pEntry->m_pImage, pEntry->m_pBrgs, range, sonarImageDir);
+        }
 
         // YOLO OBJECT DETECTION
         if (m_yoloEnabled && m_yoloDetector && pEntry->m_pImage && width > 0 && height > 0) {
@@ -818,6 +821,8 @@ void MainView::NewReturnFire(OsBufferEntry* pEntry)
                     cv::imwrite("/tmp/yolo_input_" + std::to_string(frameCount) + ".png", rotatedImg);
                     frameCount++;
                 }
+
+                qDebug() << "yoloooo";
 
                 // ========== TRANSFORM SONU ==========
 
