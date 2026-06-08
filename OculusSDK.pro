@@ -8,23 +8,22 @@ greaterThan(QT_MAJOR_VERSION, 5) {
 }
 
 CONFIG -= debug_and_release debug_and_release_target
+CONFIG += c++20
 
 DEFINES += GL_SILENCE_DEPRECATION
 
+# ----------------------------------------------------------------------------
+# Output layout: left entirely to Qt Creator. DESTDIR / OBJECTS_DIR / MOC_DIR /
+# RCC_DIR / UI_DIR are intentionally NOT overridden, so everything is built into
+# the build directory selected in Qt Creator (shadow build) with no extra nesting.
+# ----------------------------------------------------------------------------
 CONFIG(release, debug|release){
     TARGET = oculus-sdk
-    DESTDIR = ./build/release
 }
 
 CONFIG(debug, debug|release){
     TARGET = oculus-sdk-debug
-    DESTDIR = ./build/debug
 }
-
-OBJECTS_DIR = $$DESTDIR/.obj
-MOC_DIR = $$DESTDIR/.moc
-RCC_DIR = $$DESTDIR/.rcc
-UI_DIR = $$DESTDIR/.ui
 
 win32 {
     QMAKE_CXXFLAGS += /std:c++20
@@ -128,8 +127,6 @@ FORMS    += \
     OculusSonar/InfoForm.ui \
     OculusSonar/HelpForm.ui
 
-CONFIG += c++11
-
 
 RESOURCES += \
     Media/Media.qrc \
@@ -140,11 +137,9 @@ RC_FILE = Oculus.rc
 PATH_LIB = $$PWD/..
 
 INCLUDEPATH = \
-    "OculusSonar/" \
-    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.10240.0/ucrt" \
-    "C:/Program Files (x86)/Windows Kits/10/Include/10.0.10586.0/um"
+    "OculusSonar/"
 
-win32 {    
+win32 {
 
     LIBS += -lopengl32 -lglu32
     QMAKE_LFLAGS += /ignore:4099
@@ -154,42 +149,61 @@ win32 {
             -lgdi32 \
             -lole32
 
-    # OpenCV Configuration for MSVC
+    # ------------------------------------------------------------------------
+    # OpenCV + ONNX Runtime (MSVC x64)
+    # ------------------------------------------------------------------------
     OPENCV_INCLUDE = $$PATH_LIB/lib/opencv/msvc/include
-    OPENCV_LIB = $$PATH_LIB/lib/opencv/msvc/x64/vc16/lib
-    ONNX_INCLUDE = $$PATH_LIB/lib/onnxruntime/include
-    ONNX_LIB = $$PATH_LIB/lib/onnxruntime/lib
+    OPENCV_LIB     = $$PATH_LIB/lib/opencv/msvc/x64/vc16/lib
+    OPENCV_BIN     = $$PATH_LIB/lib/opencv/msvc/x64/vc16/bin
+    ONNX_INCLUDE   = $$PATH_LIB/lib/onnxruntime/include
+    ONNX_LIB       = $$PATH_LIB/lib/onnxruntime/lib
+
     INCLUDEPATH += $$OPENCV_INCLUDE
-    DEPENDPATH += $$OPENCV_INCLUDE
+    DEPENDPATH  += $$OPENCV_INCLUDE
     INCLUDEPATH += $$ONNX_INCLUDE
-    DEPENDPATH += $$ONNX_INCLUDE
+    DEPENDPATH  += $$ONNX_INCLUDE
 
     LIBS += -L$$ONNX_LIB -lonnxruntime
 
-    # OpenCV DLL ve ONNX Runtime DLL'i manuel olarak build klasörüne kopyalayın
-    # onnxruntime.dll -> build/release/
-    # opencv_world4120.dll -> build/release/
-
-    # OpenCV world library (tek DLL)
     CONFIG(release, debug|release) {
         LIBS += -L$$OPENCV_LIB -lopencv_world4100
+        OPENCV_DLL     = opencv_world4100.dll
+        WINDEPLOY_ARGS = --release
     }
-
     CONFIG(debug, debug|release) {
         LIBS += -L$$OPENCV_LIB -lopencv_world4100d
+        OPENCV_DLL     = opencv_world4100d.dll
+        WINDEPLOY_ARGS = --debug
     }
 
-    message("✅ OpenCV configured for YOLO support")
-    message("   OpenCV path: $$OPENCV_DIR")
+    # ------------------------------------------------------------------------
+    # Copy runtime dependencies next to the executable after each link.
+    # onnxruntime.dll is taken from the SAME package as $$ONNX_INCLUDE, so the
+    # header API version and the DLL always match -- this is what fixes the
+    # "API version [22] not available ... Current ORT Version is: 1.17.1" crash.
+    # Verify these source paths match your actual SDK layout under $$PATH_LIB/lib
+    # ------------------------------------------------------------------------
+    # Deploy into Qt Creator's selected build dir ($$OUT_PWD), wherever the exe lands.
+    DEST_NATIVE    = $$shell_path($$OUT_PWD)
+    ONNX_DLL_SRC   = $$shell_path($$ONNX_LIB/onnxruntime.dll)
+    OPENCV_DLL_SRC = $$shell_path($$OPENCV_BIN/$$OPENCV_DLL)
+    MODEL_SRC      = $$shell_path($$PWD/AiTrain/sonar_model.onnx)
+    TARGET_EXE     = $$shell_path($$OUT_PWD/$${TARGET}.exe)
+    WINDEPLOYQT    = $$shell_path($$[QT_INSTALL_BINS]/windeployqt.exe)
+
+    QMAKE_POST_LINK += $$QMAKE_COPY $$shell_quote($$ONNX_DLL_SRC)   $$shell_quote($$DEST_NATIVE) $$escape_expand(\\n\\t)
+    QMAKE_POST_LINK += $$QMAKE_COPY $$shell_quote($$OPENCV_DLL_SRC) $$shell_quote($$DEST_NATIVE) $$escape_expand(\\n\\t)
+    QMAKE_POST_LINK += $$QMAKE_COPY $$shell_quote($$MODEL_SRC)      $$shell_quote($$DEST_NATIVE) $$escape_expand(\\n\\t)
+
+    # Deploy Qt runtime DLLs + plugins (platforms, styles, imageformats, ...)
+    QMAKE_POST_LINK += $$shell_quote($$WINDEPLOYQT) $$WINDEPLOY_ARGS $$shell_quote($$TARGET_EXE) $$escape_expand(\\n\\t)
+
+    message("[OK] OpenCV + ONNX Runtime configured for YOLO support (Windows)")
 }
 
-# Will need to update this for dedicated x64 builds of the software
-LIBS += \
-    -L"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.10240.0/ucrt/x86" \
-    -L"C:/Program Files (x86)/Windows Kits/10/Lib/10.0.10586.0/um/x86" \
-    -luser32 \
-    -lgdi32 \
-    -lole32
+# (Removed hardcoded x86 Windows Kits lib paths. The MSVC2022 x64 kit provides
+#  the correct ucrt/um libraries automatically; the old x86 paths could clash
+#  with a 64-bit build.)
 
 # ============================================================================
 # OpenCV Configuration for Unix/Linux (YOLO)
@@ -199,7 +213,7 @@ unix {
     CONFIG += link_pkgconfig
     PKGCONFIG += opencv4
 
-    message("✅ OpenCV configured for YOLO support (Linux/Unix)")
+    message("[OK] OpenCV configured for YOLO support (Linux/Unix)")
     message("   Using pkg-config opencv4")
 }
 
